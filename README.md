@@ -16,8 +16,11 @@
 ├── docs
 │   ├── architecture.md
 │   └── setup_robot_init_todo.md
-├── ros_nodes
-│   └── piper_start_ms_node.py
+├── reference
+│   ├── README.md
+│   ├── basic_websocket_flow
+│   ├── legacy_http_policy_client
+│   └── piper_ros_nodes
 └── scripts
     ├── piper_openpi_policy_server.py
     ├── websocket_policy_client.py
@@ -31,6 +34,7 @@
 - 目前 server 侧加载 OpenPI checkpoint。
 - 机器人端通过 WebSocket 连接本地电脑暴露的 tunnel 地址。
 - 本地电脑只是通信桥，不运行模型。
+- `reference/` 目录保留基础流程和旧脚本，仅作参考，不是当前三端 OpenPI 流程的必需文件。
 
 ## 三端通信结构
 
@@ -169,11 +173,11 @@ WebSocket JSON 请求协议工具。主要负责：
 - 编码图像为 JSON 可传输的 base64 JPEG payload。
 - 构造 policy request。
 
-### `ros_nodes/piper_start_ms_node.py`
+## Reference Scripts
 
-Piper ROS/CAN 桥接节点。它可以发布 puppet joint/end-pose 状态，也可以订阅 master joint 或 `/pos_cmd` 控制真机。
+`reference/` 目录保存早期基础流程和 Piper ROS/CAN 参考节点。它们用于理解原始通信方式、迁移到新机器或改造新模型时参考，不属于当前 OpenPI 三端运行命令的必需文件。
 
-注意：这个节点默认使用 `/puppet/joint_states` 和 `/master/joint_states`，而当前 WebSocket client 默认使用 `/puppet/joint_left`、`/puppet/joint_right`、`/master/joint_left`、`/master/joint_right`。实际使用时需要启动左右臂两个实例并做 ROS remap，或后续把 topic 改成参数化。
+详见 [`reference/README.md`](reference/README.md)。
 
 ## Action Space
 
