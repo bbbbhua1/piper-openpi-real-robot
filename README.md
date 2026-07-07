@@ -14,6 +14,7 @@
 .
 ├── README.md
 ├── docs
+│   ├── agilex_robot_ros_startup.md
 │   ├── architecture.md
 │   └── setup_robot_init_todo.md
 ├── reference
@@ -55,7 +56,10 @@ Server
 
 ## 0. 机器初始化
 
-待补齐。这里后续记录：
+底层 ROS、CAN、相机、rosbag 录制和数据处理的现场流程见
+[`docs/agilex_robot_ros_startup.md`](docs/agilex_robot_ros_startup.md)。
+
+后续还需要继续整理：
 
 - Piper 上电和急停状态检查。
 - ROS master / CAN / 相机启动顺序。
