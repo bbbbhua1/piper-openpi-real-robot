@@ -376,6 +376,7 @@ class OpenPIPolicy:
                             "cam_right_wrist": "wrist_image_right",
                         },
                         "state": "state",
+                        "prompt": "prompt",
                     }
                 )
             ]

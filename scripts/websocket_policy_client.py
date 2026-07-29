@@ -20,6 +20,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import websockets
 
+from camera_video_recorder import (
+    CameraVideoRecorder,
+    DEFAULT_RECORD_DIR,
+    DEFAULT_UPLOAD_DIR,
+    DEFAULT_UPLOAD_HOST,
+    DEFAULT_UPLOAD_PORT,
+)
 from ws_policy_protocol import CAMERA_NAMES, build_policy_request
 
 
@@ -242,6 +249,7 @@ class RosObservationSource:
         compressed_images: bool,
         require_images: bool,
         enable_topic: str,
+        video_recorder: Optional[CameraVideoRecorder] = None,
     ) -> None:
         import rospy
         from piper_msgs.msg import PiperStatusMsg
@@ -253,6 +261,7 @@ class RosObservationSource:
         self.require_images = require_images
         self.camera_topics = camera_topics
         self.enable_topic = enable_topic
+        self.video_recorder = video_recorder
         self.lock = threading.Lock()
         self.left_joint = None
         self.right_joint = None
@@ -343,10 +352,13 @@ class RosObservationSource:
             self.right_joint = msg
 
     def _compressed_image_callback(self, msg: Any, camera_name: str) -> None:
+        payload = bytes(msg.data)
+        if self.video_recorder is not None:
+            self.video_recorder.submit(camera_name, payload)
         with self.lock:
             self.images[camera_name] = {
                 "encoding": "jpeg",
-                "data": bytes(msg.data),
+                "data": payload,
             }
 
     def _raw_image_callback(self, msg: Any, camera_name: str) -> None:
@@ -392,6 +404,23 @@ class RosObservationSource:
                 "right_arm": self._joint_to_state(self.right_joint),
             }
         return images, state
+
+    def finalize_recording(self) -> None:
+        recorder = self.video_recorder
+        if recorder is None:
+            return
+        self.video_recorder = None
+
+        print("[record] finalizing videos in {}".format(recorder.session_dir))
+        recorder.close()
+        manifest_path = recorder.write_manifest()
+        print("[record] manifest written: {}".format(manifest_path))
+        try:
+            remote_path = recorder.upload()
+            print("[record] uploaded recording: {}".format(remote_path))
+        except Exception as exc:
+            print("[record] upload failed: {}".format(exc))
+            print("[record] local recording preserved: {}".format(recorder.session_dir))
 
 
 class RosJointExecutor:
@@ -607,14 +636,40 @@ def parse_bool(value: Any) -> bool:
 def create_source(args: argparse.Namespace) -> Any:
     if args.source == "mock":
         return MockObservationSource()
-    return RosObservationSource(
-        left_joint_topic=args.left_observation_topic,
-        right_joint_topic=args.right_observation_topic,
-        camera_topics=parse_camera_topics(args.camera_topic),
-        compressed_images=args.compressed_images,
-        require_images=args.require_images,
-        enable_topic=args.enable_topic,
-    )
+    camera_topics = parse_camera_topics(args.camera_topic)
+    video_recorder = None
+    if args.record_videos:
+        if not args.compressed_images:
+            raise ValueError("--record-videos requires --compressed-images")
+        if not camera_topics:
+            raise ValueError("--record-videos requires at least one --camera-topic")
+        video_recorder = CameraVideoRecorder(
+            camera_names=camera_topics.keys(),
+            root_dir=args.record_dir,
+            fps=args.record_fps,
+            queue_size=args.record_queue_size,
+            session_name=args.record_session_name,
+            upload_host=args.record_upload_host,
+            upload_port=args.record_upload_port,
+            upload_dir=args.record_upload_dir,
+        )
+        print("[record] recording session: {}".format(video_recorder.session_dir))
+
+    try:
+        return RosObservationSource(
+            left_joint_topic=args.left_observation_topic,
+            right_joint_topic=args.right_observation_topic,
+            camera_topics=camera_topics,
+            compressed_images=args.compressed_images,
+            require_images=args.require_images,
+            enable_topic=args.enable_topic,
+            video_recorder=video_recorder,
+        )
+    except Exception:
+        if video_recorder is not None:
+            video_recorder.close()
+            video_recorder.write_manifest()
+        raise
 
 
 def create_executor(args: argparse.Namespace) -> Any:
@@ -725,20 +780,25 @@ async def run_loop(args: argparse.Namespace) -> None:
     except SafetyTrip as exc:
         print("[safety] client stopped: {}".format(exc))
     finally:
-        if args.execute_actions and is_safety_tripped(source):
-            print("[safety] skipping hold/disable-on-exit cleanup after arm_status fault")
-        elif args.execute_actions:
-            if args.hold_on_exit:
-                hold_position = getattr(executor, "hold_position", None)
-                if hold_position is not None:
-                    try:
-                        hold_position(get_current_state(source), hold_hz=args.hold_hz)
-                    except Exception as exc:
-                        print("[hold] skipped because current state was unavailable: {}".format(exc))
-            if args.disable_on_exit:
-                disable_robot = getattr(executor, "disable_robot", None)
-                if disable_robot is not None:
-                    disable_robot()
+        try:
+            if args.execute_actions and is_safety_tripped(source):
+                print("[safety] skipping hold/disable-on-exit cleanup after arm_status fault")
+            elif args.execute_actions:
+                if args.hold_on_exit:
+                    hold_position = getattr(executor, "hold_position", None)
+                    if hold_position is not None:
+                        try:
+                            hold_position(get_current_state(source), hold_hz=args.hold_hz)
+                        except Exception as exc:
+                            print("[hold] skipped because current state was unavailable: {}".format(exc))
+                if args.disable_on_exit:
+                    disable_robot = getattr(executor, "disable_robot", None)
+                    if disable_robot is not None:
+                        disable_robot()
+        finally:
+            finalize_recording = getattr(source, "finalize_recording", None)
+            if finalize_recording is not None:
+                finalize_recording()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -804,6 +864,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--compressed-images", action="store_true")
     parser.add_argument("--require-images", action="store_true")
+    parser.add_argument(
+        "--record-videos",
+        action="store_true",
+        help="record every compressed camera callback to one MP4 per camera",
+    )
+    parser.add_argument("--record-dir", default=DEFAULT_RECORD_DIR)
+    parser.add_argument("--record-fps", type=float, default=30.0)
+    parser.add_argument("--record-queue-size", type=int, default=90)
+    parser.add_argument("--record-upload-host", default=DEFAULT_UPLOAD_HOST)
+    parser.add_argument("--record-upload-port", type=int, default=DEFAULT_UPLOAD_PORT)
+    parser.add_argument("--record-upload-dir", default=DEFAULT_UPLOAD_DIR)
+    parser.add_argument("--record-session-name", default=None)
     return parser
 
 
