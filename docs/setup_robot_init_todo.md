@@ -1,6 +1,7 @@
 # Robot Initialization TODO
 
-当前仓库还没有完整机器初始化流程。后续需要补齐以下内容。
+ROS、CAN、Piper 双臂、三路相机、Tracer 和实时投影节点的已验证启动流程见
+[`agilex_robot_ros_startup.md`](agilex_robot_ros_startup.md)。本文件只保留尚未在本仓库中形成可复现步骤的事项。
 
 ## Power And Safety
 
@@ -10,22 +11,17 @@
 - 夹爪状态检查。
 - 安全边界和人员站位。
 
-## ROS And CAN
+## Hardware Safety And Calibration
 
-- ROS master 启动方式。
-- 左右臂 CAN 口对应关系。
-- Piper bridge 节点启动方式。
-- `/enable_flag` 的预期行为。
-- 左右臂 topic remap 规则。
+- 机械臂和夹爪的 home、标定与复位流程。
+- `/enable_flag` 的精确定义、失能条件和异常恢复流程。
+- 与 `auto_enable:=false` 配合的人工使能检查。
+- 不同机器人硬件版本的 CAN 转接器端口映射确认。
 
 ## Cameras
 
-- 三路相机启动方式。
-- 当前使用 topic：
-  - `/camera_f/color/image_raw/compressed`
-  - `/camera_l/color/image_raw/compressed`
-  - `/camera_r/color/image_raw/compressed`
 - 图像方向、颜色空间和延迟检查。
+- `/dev/video* Permission denied` 等权限异常的标准修复步骤。
 
 ## Dry Run
 

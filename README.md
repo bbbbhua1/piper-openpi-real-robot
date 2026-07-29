@@ -30,7 +30,7 @@
 
 ## 当前状态
 
-- 机器初始化流程还没有整理进来，后续补齐。
+- 机器人端完整初始化流程已在 2026-07-28 的真机上验证，并记录在 [`docs/agilex_robot_ros_startup.md`](docs/agilex_robot_ros_startup.md)。
 - 当前 action space 是 joint，不是 EEF。
 - 目前 server 侧加载 OpenPI checkpoint。
 - 机器人端通过 WebSocket 连接本地电脑暴露的 tunnel 地址。
@@ -56,16 +56,18 @@ Server
 
 ## 0. 机器初始化
 
-底层 ROS、CAN、相机、rosbag 录制和数据处理的现场流程见
+在启动 policy client 前，必须先完成机器人端的 ROS 初始化。完整命令、启动顺序、预期节点、topic 映射和排障见
 [`docs/agilex_robot_ros_startup.md`](docs/agilex_robot_ros_startup.md)。
 
-后续还需要继续整理：
+已验证的控制模式为：
 
-- Piper 上电和急停状态检查。
-- ROS master / CAN / 相机启动顺序。
-- 左右臂 topic remap 规则。
-- 夹爪标定、home、enable 流程。
-- 真机安全检查清单。
+```bash
+roslaunch piper start_ms_piper.launch mode:=1 auto_enable:=false
+```
+
+其中 `mode:=1` 用于下发机械臂控制指令；当前 OpenPI client 读取
+`/puppet/joint_left`、`/puppet/joint_right`，并向
+`/master/joint_left`、`/master/joint_right` 发布 joint action。
 
 ## 1. 服务器端启动 OpenPI Policy Server
 
@@ -209,8 +211,6 @@ Piper ROS 节点里有 EEF 相关接口，例如 `/puppet/end_pose`、`/puppet/e
 
 ## 后续待补
 
-- 机器初始化流程。
-- 左右臂 ROS launch/remap 示例。
 - EEF action 版本设计。
 - checkpoint 和任务 instruction 的实验记录模板。
-- 常见报错排查。
+- 上电、急停、夹爪和 home 的硬件安全清单。
