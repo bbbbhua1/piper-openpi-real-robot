@@ -1,12 +1,15 @@
 # Piper OpenPI Real Robot Workflow
 
-这个仓库记录松灵 Piper 机器人真机实验流程。当前版本的主链路是：
+这个仓库保存松灵 Piper 双臂机器人运行 OpenPI checkpoint 的完整真机流程。当前链路是：
 
-- 服务器端加载 OpenPI checkpoint，启动 JSON WebSocket policy server。
-- 本地电脑开启 SSH tunnel，把机器人可访问的本地端口转发到服务器 policy server。
-- 机器人端运行 WebSocket client，读取 ROS joint/camera topic，接收 action chunk，并发布 joint action。
+- 开发服务器使用一张 A800 加载 OpenPI checkpoint，运行 JSON WebSocket policy server。
+- 本地电脑通过 SSH tunnel，把机器人可访问的本地端口转发到服务器。
+- 机器人端 WebSocket client 读取左右臂 joint state 和三路相机，接收 action chunk。
+- 通信测试默认不执行动作；完整实验才向左右臂发布 joint action。
+- client 全程录制三路相机，结束时封装 MP4，并上传到开发服务器。
 
-当前可用流程主要面向 OpenPI 模型推理。机器人端 client 的通信协议本身不强绑定 OpenPI，但本仓库里的 `piper_openpi_policy_server.py` 是 OpenPI checkpoint 专用适配器。
+当前 action space 是 joint，不是 EEF。机器人端通信协议不强绑定 OpenPI，但
+`piper_openpi_policy_server.py` 是 OpenPI checkpoint 专用适配器。
 
 ## 目录
 
@@ -22,195 +25,385 @@
 │   ├── basic_websocket_flow
 │   ├── legacy_http_policy_client
 │   └── piper_ros_nodes
-└── scripts
-    ├── piper_openpi_policy_server.py
-    ├── websocket_policy_client.py
-    └── ws_policy_protocol.py
+├── scripts
+│   ├── camera_video_recorder.py
+│   ├── piper_openpi_policy_server.py
+│   ├── websocket_policy_client.py
+│   └── ws_policy_protocol.py
+└── tests
+    └── test_camera_video_recorder.py
 ```
 
-## 当前状态
+## 已验证配置
 
-- 机器人端完整初始化流程已在 2026-07-28 的真机上验证，并记录在 [`docs/agilex_robot_ros_startup.md`](docs/agilex_robot_ros_startup.md)。
-- 当前 action space 是 joint，不是 EEF。
-- 目前 server 侧加载 OpenPI checkpoint。
-- 机器人端通过 WebSocket 连接本地电脑暴露的 tunnel 地址。
-- 本地电脑只是通信桥，不运行模型。
-- `reference/` 目录保留基础流程和旧脚本，仅作参考，不是当前三端 OpenPI 流程的必需文件。
+开发服务器：
+
+```text
+SSH: ssh -p 3763 root@10.40.1.215
+OpenPI: /bh/media/section/iclr_proj/zbh/openpi
+GPU: 1 × A800
+Config: pi05_cmap_all_tasks_v21
+Checkpoint: /bh/media/section/iclr_proj/zbh/openpi/training_runs/pi05_all_tasks_openpi_v21_8gpu_b512_80k/checkpoints/pi05_cmap_all_tasks_v21/pi05_all_tasks_openpi_v21_pi05_8gpu_b512_80k_correct_20260718/60000
+```
+
+任务：
+
+```text
+Arrange the dominoes on the table in a horizontal row and then knock them over.
+```
+
+2026-07-28/29 的真机验证结果：
+
+- 三路相机均为 1280×720、30 FPS，每路短测写入 150 帧。
+- 三路均为 0 丢帧，FFmpeg 正常退出，MP4 可由 FFprobe 正常读取。
+- 录像目录成功从机器人上传到服务器。
+- 单张 A800 成功加载 checkpoint。
+- 一次真实 policy 请求成功返回左右臂各 10 个 waypoint。
 
 ## 三端通信结构
 
 ```text
 Robot
   websocket_policy_client.py
-  ws://10.13.12.85:18000
+  ws://<local-computer-robot-network-ip>:18001
         |
         v
 Local computer
-  SSH tunnel: 0.0.0.0:18000 -> server 127.0.0.1:7081
+  SSH tunnel: 0.0.0.0:18001 -> server 127.0.0.1:7081
         |
         v
-Server
+Development server
   piper_openpi_policy_server.py
-  OpenPI checkpoint inference
+  OpenPI checkpoint inference on one A800
 ```
 
-## 0. 机器初始化
+`10.13.10.63` 是已验证时本地电脑在机器人网络中的 IP，仅作为下面命令的示例。
+网络变化后，应先确认本地电脑当前 IP，并同步修改机器人端的 `--uri`。
 
-在启动 policy client 前，必须先完成机器人端的 ROS 初始化。完整命令、启动顺序、预期节点、topic 映射和排障见
+## 0. 机器人 ROS 初始化
+
+在启动 policy client 前，必须完成机器人端 ROS 初始化。完整启动顺序、节点、
+topic 映射和排障见
 [`docs/agilex_robot_ros_startup.md`](docs/agilex_robot_ros_startup.md)。
 
-已验证的控制模式为：
+当前 joint-control 流程已验证的 Piper 模式为：
 
 ```bash
 roslaunch piper start_ms_piper.launch mode:=1 auto_enable:=false
 ```
 
-其中 `mode:=1` 用于下发机械臂控制指令；当前 OpenPI client 读取
-`/puppet/joint_left`、`/puppet/joint_right`，并向
-`/master/joint_left`、`/master/joint_right` 发布 joint action。
+`mode:=1` 用于接收上层 joint action。client 读取：
 
-## 1. 服务器端启动 OpenPI Policy Server
-
-先登录服务器，开一个终端保持运行：
-
-```bash
-ssh -p 3164 -o ClearAllForwardings=yes root@10.40.1.219
+```text
+/puppet/joint_left
+/puppet/joint_right
 ```
 
-进入 OpenPI 目录：
+并在完整实验中发布：
 
-```bash
-cd /media/section/iclr_proj/zbh/openpi
+```text
+/master/joint_left
+/master/joint_right
 ```
 
-启动 policy server：
+启动 client 前应确认三路压缩相机 topic 都在持续出图：
 
-```bash
-CUDA_VISIBLE_DEVICES=0 HF_HUB_OFFLINE=1 HF_DATASETS_OFFLINE=1 \
-.venv/bin/python scripts/piper_openpi_policy_server.py \
-  --host 127.0.0.1 \
-  --port 7081 \
-  --config pi05_s40_3 \
-  --checkpoint /media/section/iclr_proj/zbh/openpi/training_runs/pi05_s40_3/checkpoints/pi05_s40_3/s40_3_pi05_8gpu_50k_fixed_indices/49999 \
-  --horizon 10 \
-  --action-dt 0.1 \
-  --max-joint-step 0.05
+```text
+/camera_f/color/image_raw/compressed
+/camera_l/color/image_raw/compressed
+/camera_r/color/image_raw/compressed
 ```
 
-说明：
+## 1. 部署脚本
 
-- `--host 127.0.0.1` 表示只在服务器本机监听，外部通过 SSH tunnel 访问。
-- `--port 7081` 是服务器内部 WebSocket 端口。
-- `--checkpoint` 按实际实验 checkpoint 修改。
-- `--max-joint-step 0.05` 用于限制每个 waypoint 的关节跳变。
+服务器端脚本应位于 OpenPI checkout：
 
-## 2. 本地电脑开启 SSH Tunnel
+```text
+/bh/media/section/iclr_proj/zbh/openpi/scripts/piper_openpi_policy_server.py
+```
 
-本地电脑另开一个终端，保持 tunnel 运行：
+从仓库根目录更新服务器脚本：
 
 ```bash
-ssh -F /dev/null -p 3164 -N -g \
+scp -P 3763 scripts/piper_openpi_policy_server.py \
+  root@10.40.1.215:/bh/media/section/iclr_proj/zbh/openpi/scripts/
+```
+
+机器人端目录：
+
+```text
+/home/agilex/piper-openpi-real-robot/scripts
+```
+
+机器人可连接时，从仓库根目录更新 client：
+
+```bash
+ssh agilex@10.13.11.215 \
+  'mkdir -p /home/agilex/piper-openpi-real-robot/scripts /home/agilex/piper-openpi-real-robot/recordings'
+
+scp \
+  scripts/camera_video_recorder.py \
+  scripts/websocket_policy_client.py \
+  scripts/ws_policy_protocol.py \
+  agilex@10.13.11.215:/home/agilex/piper-openpi-real-robot/scripts/
+```
+
+不要把服务器端脚本和机器人端脚本混用。
+
+## 2. 三终端无动作通信测试
+
+按终端 1 → 终端 2 → 终端 3 的顺序执行。本节会发送一次真实 observation，
+得到一次真实 policy action，并录制三路相机，但不会向机械臂发布 action。
+
+### 终端 1：启动 OpenPI Policy Server
+
+在本地电脑运行：
+
+```bash
+ssh -F /dev/null -p 3763 -tt root@10.40.1.215 "cd /bh/media/section/iclr_proj/zbh/openpi && \
+export CUDA_VISIBLE_DEVICES=0 \
+XLA_PYTHON_CLIENT_PREALLOCATE=false \
+HF_HUB_OFFLINE=1 \
+HF_DATASETS_OFFLINE=1 \
+PYTHONPATH=/bh/media/section/iclr_proj/zbh/openpi/src:/bh/media/section/iclr_proj/zbh/openpi/packages/openpi-client/src && \
+exec /bh/media/section/iclr_proj/third_party/openpi/.venv/bin/python -u \
+scripts/piper_openpi_policy_server.py \
+--host 127.0.0.1 \
+--port 7081 \
+--openpi-root /bh/media/section/iclr_proj/zbh/openpi \
+--config pi05_cmap_all_tasks_v21 \
+--checkpoint /bh/media/section/iclr_proj/zbh/openpi/training_runs/pi05_all_tasks_openpi_v21_8gpu_b512_80k/checkpoints/pi05_cmap_all_tasks_v21/pi05_all_tasks_openpi_v21_pi05_8gpu_b512_80k_correct_20260718/60000 \
+--horizon 10 \
+--action-dt 0.1 \
+--max-joint-step 0.05"
+```
+
+看到下面这行后，再启动终端 2：
+
+```text
+piper OpenPI policy server listening on ws://127.0.0.1:7081
+```
+
+### 终端 2：建立 SSH Tunnel
+
+在本地电脑运行并保持该终端开启：
+
+```bash
+ssh -F /dev/null -p 3763 -N -g \
   -o ExitOnForwardFailure=yes \
   -o StrictHostKeyChecking=accept-new \
   -o ServerAliveInterval=15 \
   -o ServerAliveCountMax=3 \
-  -L '0.0.0.0:18000:127.0.0.1:7081' \
-  root@10.40.1.219
+  -L 0.0.0.0:18001:127.0.0.1:7081 \
+  root@10.40.1.215
 ```
 
-说明：
+正常情况下该命令不输出内容。它在本地电脑监听 `18001`，并转发到服务器
+`127.0.0.1:7081`。
 
-- 本地电脑监听 `0.0.0.0:18000`。
-- 请求会转发到服务器的 `127.0.0.1:7081`。
-- 机器人需要能访问本地电脑的 IP，例如下面命令中的 `10.13.12.85`。
+### 终端 3：机器人 Dry Run
 
-## 3. 机器人端启动 WebSocket Client
-
-在机器人终端运行：
+在本地电脑运行。`-A` 必须保留：录像上传程序使用转发后的 SSH agent，以
+`BatchMode=yes` 连接开发服务器。
 
 ```bash
-python3 websocket_policy_client.py \
-  --uri ws://10.13.12.85:18000 \
-  --instruction "Arrange the dominoes on the table in a horizontal row and then knock them over." \
-  --source ros \
-  --executor ros \
-  --execute-actions \
-  --waypoint-sleep 1.0 \
-  --home-hz 20 \
-  --home-min-duration 2.0 \
-  --home-max-duration 20.0 \
-  --home-joint-speed 0.25 \
-  --hold-hz 20 \
-  --left-observation-topic /puppet/joint_left \
-  --right-observation-topic /puppet/joint_right \
-  --left-action-topic /master/joint_left \
-  --right-action-topic /master/joint_right \
-  --camera-topic head=/camera_f/color/image_raw/compressed \
-  --camera-topic left_wrist=/camera_l/color/image_raw/compressed \
-  --camera-topic right_wrist=/camera_r/color/image_raw/compressed \
-  --compressed-images \
-  --require-images \
-  --enable-on-start
+ssh -A -tt agilex@10.13.11.215 "source /opt/ros/noetic/setup.bash && \
+source /home/agilex/agilex_ws/devel/setup.bash && \
+source /home/agilex/cobot_magic/camera_ws/devel/setup.bash && \
+source /home/agilex/cobot_magic/Piper_ros_private-ros-noetic/devel/setup.bash && \
+exec /home/agilex/miniconda3/envs/xrocs-env/bin/python \
+/home/agilex/piper-openpi-real-robot/scripts/websocket_policy_client.py \
+--uri ws://10.13.10.63:18001 \
+--instruction 'Arrange the dominoes on the table in a horizontal row and then knock them over.' \
+--source ros \
+--executor mock \
+--max-steps 1 \
+--camera-topic head=/camera_f/color/image_raw/compressed \
+--camera-topic left_wrist=/camera_l/color/image_raw/compressed \
+--camera-topic right_wrist=/camera_r/color/image_raw/compressed \
+--compressed-images \
+--require-images \
+--record-videos \
+--record-upload-host root@10.40.1.215 \
+--record-upload-port 3763 \
+--record-upload-dir /bh/media/section/iclr_proj/zbh/piper_openpi_real_robot_videos"
 ```
 
-启动后，机器人端会周期性读取当前 joint state 和三路相机图像，通过 WebSocket 请求 policy server。服务器根据当前 OpenPI checkpoint 返回 action chunk，机器人端再发布到左右臂 action topic。
+该命令使用真实 ROS observation 和真实 checkpoint，但由于：
 
-## 文件说明
+```text
+--executor mock
+没有 --execute-actions
+```
+
+所以不会发布机器人 action。通信成功时可看到：
+
+```text
+connected to policy server
+[dry-run] action execution disabled
+[record] uploaded recording: ...
+```
+
+服务器端同时会输出 `[step 0]`。
+
+## 3. 完整真机实验
+
+先成功完成第 2 节的单步 dry run，确认 action、通信和视频上传均正常，再运行
+本节。终端 1 和终端 2 的命令保持不变，只替换终端 3：
+
+```bash
+ssh -A -tt agilex@10.13.11.215 "source /opt/ros/noetic/setup.bash && \
+source /home/agilex/agilex_ws/devel/setup.bash && \
+source /home/agilex/cobot_magic/camera_ws/devel/setup.bash && \
+source /home/agilex/cobot_magic/Piper_ros_private-ros-noetic/devel/setup.bash && \
+exec /home/agilex/miniconda3/envs/xrocs-env/bin/python \
+/home/agilex/piper-openpi-real-robot/scripts/websocket_policy_client.py \
+--uri ws://10.13.10.63:18001 \
+--instruction 'Arrange the dominoes on the table in a horizontal row and then knock them over.' \
+--source ros \
+--executor ros \
+--execute-actions \
+--enable-on-start \
+--camera-topic head=/camera_f/color/image_raw/compressed \
+--camera-topic left_wrist=/camera_l/color/image_raw/compressed \
+--camera-topic right_wrist=/camera_r/color/image_raw/compressed \
+--compressed-images \
+--require-images \
+--record-videos \
+--record-upload-host root@10.40.1.215 \
+--record-upload-port 3763 \
+--record-upload-dir /bh/media/section/iclr_proj/zbh/piper_openpi_real_robot_videos"
+```
+
+完整实验会：
+
+1. 等待左右臂状态和三路相机就绪。
+2. 使能机械臂，并按现有 client 行为平滑回到 zero-joint home。
+3. 持续请求 policy，并发布服务器返回的左右臂 waypoint。
+4. 同时把全部三路压缩相机 callback 写入独立 MP4。
+
+### 停止与录像上传
+
+完整实验默认启用退出 hold：
+
+1. 第一次按 `Ctrl-C`：停止推理，进入当前位置 hold。
+2. 第二次按 `Ctrl-C`：退出 hold。
+3. client 关闭三个 FFmpeg writer，写入 `manifest.json`。
+4. client 把完整 session 上传到开发服务器。
+
+不要在 hold 阶段直接关闭终端，否则录像可能没有机会完成封装和上传。本命令没有
+加入 `--disable-on-exit`，退出 hold 后机器人保持 enabled；按现场安全流程处理
+后续失能。
+
+## 4. 视频文件
+
+机器人本地根目录：
+
+```text
+/home/agilex/piper-openpi-real-robot/recordings
+```
+
+服务器上传根目录：
+
+```text
+/bh/media/section/iclr_proj/zbh/piper_openpi_real_robot_videos
+```
+
+每次运行创建一个 `domino_YYYYMMDD_HHMMSS` session：
+
+```text
+domino_YYYYMMDD_HHMMSS/
+├── head.mp4
+├── left_wrist.mp4
+├── right_wrist.mp4
+├── head.ffmpeg.log
+├── left_wrist.ffmpeg.log
+├── right_wrist.ffmpeg.log
+└── manifest.json
+```
+
+`manifest.json` 记录时长、FPS、收到/写入/丢弃帧数、FFmpeg 返回码和上传目标。
+即使上传失败，机器人本地 session 也不会删除。确认服务器文件完整后，可再人工
+清理机器人上的旧录像。
+
+## 5. 文件说明
+
+### `scripts/camera_video_recorder.py`
+
+每路相机使用独立 bounded queue 和 writer thread。ROS callback 只提交 JPEG
+payload；队列满时丢弃最旧帧，避免视频写盘阻塞控制与推理链路。FFmpeg 直接把
+相机 MJPEG 写入 MP4，不重复编码。
 
 ### `scripts/piper_openpi_policy_server.py`
 
-服务器端入口。它把机器人端 JSON 请求转换为 OpenPI observation，加载本地 OpenPI checkpoint 推理，并把 OpenPI action 转换成机器人端 client 需要的 joint action chunk。
+把机器人 JSON 请求转换为 OpenPI observation，包含 state、三路图像和 prompt；
+加载 checkpoint 推理，再将 OpenPI action 转换为 client 需要的 joint action
+chunk。
 
 ### `scripts/websocket_policy_client.py`
 
-机器人端入口。它从 ROS topic 读取：
-
-- 左右臂 joint state。
-- 三路压缩相机图像。
-- Piper arm status。
-
-收到 server 返回的 action 后，它向左右臂 joint action topic 发布 `sensor_msgs/JointState`。
+读取左右臂 joint state、三路压缩相机和 Piper arm status；发送 policy 请求，
+执行或 dry-run 返回的 action，并管理录像收尾与上传。
 
 ### `scripts/ws_policy_protocol.py`
 
-WebSocket JSON 请求协议工具。主要负责：
+生成 `request_id`，编码 JPEG payload，并构造 WebSocket JSON request。
 
-- 生成 `request_id`。
-- 编码图像为 JSON 可传输的 base64 JPEG payload。
-- 构造 policy request。
+## 6. Action Space
+
+当前 WebSocket 推理链路使用 joint action：
+
+- client 读取 `sensor_msgs/JointState.position` 作为 state。
+- server 输出 `left_arm` / `right_arm` waypoint。
+- client 把左右臂 waypoint 发布成 `JointState.position`。
+
+Piper ROS 节点还提供 EEF 接口，例如 `/puppet/end_pose`、
+`/puppet/end_pose_euler` 和 `/pos_cmd`，但当前 client/server 没有接入 EEF
+action schema。
+
+## 7. 运行前检查
+
+- 确认 checkpoint 路径存在。
+- 确认所选 A800 空闲。
+- 确认服务器 `127.0.0.1:7081` 没有旧 policy server 占用。
+- 确认 tunnel 使用的本地端口没有被其他程序占用。
+- 确认机器人能访问本地电脑的机器人网络 IP。
+- 确认 Piper 为 `mode:=1`。
+- 确认左右臂 joint state 和三路相机 topic 持续有数据。
+- 确认机械臂周围净空、急停可触达。
+- 每次完整实验前只做一次第 2 节 dry run，避免增加不必要的流程。
+
+## 8. 测试
+
+本地运行：
+
+```bash
+python3 -m unittest -v tests.test_camera_video_recorder
+python3 -m py_compile \
+  scripts/camera_video_recorder.py \
+  scripts/websocket_policy_client.py \
+  scripts/piper_openpi_policy_server.py \
+  scripts/ws_policy_protocol.py
+```
+
+当前测试覆盖：
+
+- 三路 FFmpeg 命令。
+- bounded queue 丢帧策略。
+- manifest 统计。
+- SSH/SCP 上传命令。
+- 上传失败时保留本地 session。
+- client 录像参数默认值。
+- 压缩相机 callback 原始 JPEG payload。
 
 ## Reference Scripts
 
-`reference/` 目录保存早期基础流程和 Piper ROS/CAN 参考节点。它们用于理解原始通信方式、迁移到新机器或改造新模型时参考，不属于当前 OpenPI 三端运行命令的必需文件。
-
-详见 [`reference/README.md`](reference/README.md)。
-
-## Action Space
-
-当前 WebSocket 推理链路使用 joint action。
-
-证据：
-
-- 机器人端读取 `sensor_msgs/JointState.position` 作为 state。
-- server 输出 `left_arm` / `right_arm` waypoint。
-- client 把 `left_arm` / `right_arm` 直接发布成 `JointState.position`。
-
-Piper ROS 节点里有 EEF 相关接口，例如 `/puppet/end_pose`、`/puppet/end_pose_euler` 和 `/pos_cmd`，但当前 WebSocket client/server 还没有接入 EEF action schema。
-
-## 运行前检查
-
-建议每次真机运行前确认：
-
-- 服务器 OpenPI checkpoint 路径存在。
-- policy server 已在服务器 `127.0.0.1:7081` 启动。
-- 本地电脑 tunnel 正在运行，且机器人能访问本地电脑 IP。
-- 机器人端 ROS topic 都有数据。
-- 三路相机图像 topic 可用。
-- `/enable_flag` 行为符合当前实验预期。
-- 初次测试时先去掉 `--execute-actions` 做 dry run。
+`reference/` 保存早期基础流程和 Piper ROS/CAN 参考节点，只用于理解和迁移，不是
+当前三端 OpenPI 流程的必需文件。详见
+[`reference/README.md`](reference/README.md)。
 
 ## 后续待补
 
 - EEF action 版本设计。
 - checkpoint 和任务 instruction 的实验记录模板。
-- 上电、急停、夹爪和 home 的硬件安全清单。
+- 上电、急停、夹爪和 home 的完整硬件安全清单。
