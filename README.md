@@ -405,5 +405,4 @@ python3 -m py_compile \
 ## 后续待补
 
 - EEF action 版本设计。
-- checkpoint 和任务 instruction 的实验记录模板。
 - 上电、急停、夹爪和 home 的完整硬件安全清单。
