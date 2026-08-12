@@ -4,6 +4,11 @@
 每个模型拥有独立目录，目录内分别维护自己的 server、client、测试和模型说明；
 公共 ROS/网络资料继续放在根目录的 `docs/` 和 `reference/`。
 
+> **当前控制方式：joint control。** 本仓库的 OpenPI pi0.5、WAM / UVA-DiT 与
+> FastWAM 流程都读取 Piper 的左右臂 joint observation，并在真机执行时发布 joint
+> target；不使用 EEF / Cartesian 控制接口。启动 Piper 时必须使用 `mode:=1`，不要把
+> 本仓库的 client 接到 `mode:=0` 或 EEF 控制链路。
+
 ## 模型与目录
 
 ```text
@@ -60,6 +65,81 @@ WebSocket URI。
 启动任一模型前，先按照
 [`docs/agilex_robot_ros_startup.md`](docs/agilex_robot_ros_startup.md) 初始化 Piper，
 并确认左右臂 state 与三路相机 topic 持续发布。
+
+## 连接、启动与部署机器人端
+
+### 查找机器人 IP 并 SSH 登录
+
+在机器人本机接上显示器和键盘后，打开终端运行以下任意一条命令，记录与本地电脑
+处于同一机器人网络网段的 IPv4 地址：
+
+```bash
+hostname -I
+# 或：ifconfig
+# 或：ip -br addr
+```
+
+从本地电脑连接机器人：
+
+```bash
+ssh agilex@<robot-ip>
+```
+
+将 `<robot-ip>` 替换为上一步得到的地址。首次连接时按提示确认主机指纹；密码应在
+交互式提示中输入，**不要写进命令、脚本、README 或 Git 历史**。若网络地址改变，
+还需同步更新终端 2 tunnel 的监听地址与终端 3 中 `--uri` 的本地电脑 IP。
+
+### 机器人 ROS 启动概要
+
+开始 policy client 前，先完成现场安全检查（上电、急停释放、工作区净空），然后在
+机器人端按以下顺序启动 ROS：
+
+1. 启动 `roscore`。
+2. 配置 CAN，并启动 Piper：`roslaunch piper start_ms_piper.launch mode:=1 auto_enable:=false`。
+3. 启动三路 RealSense 相机。
+4. 按现场需要启动 Tracer 底盘和实时投影节点。
+5. 确认 `/puppet/joint_left`、`/puppet/joint_right` 与三路 compressed image topic
+   正在发布，再启动模型 client。
+
+完整命令、topic 映射、CAN 检查、相机排障和正常停止顺序见
+[`docs/agilex_robot_ros_startup.md`](docs/agilex_robot_ros_startup.md)。
+
+### 部署模型 client 到机器人
+
+在开发仓库根目录执行下表对应的 `scp`。仅同步运行所需 client 文件；`test_*.py` 不必
+部署。先在机器人创建目标目录和录像目录：
+
+```bash
+ssh agilex@<robot-ip> \
+  'mkdir -p /home/agilex/piper-openpi-real-robot/recordings'
+```
+
+| 模型 | 从仓库复制的 client 文件 | 机器人端目标目录 | 额外要求 |
+| --- | --- | --- | --- |
+| OpenPI pi0.5 | `models/openpi_pi05/client/camera_video_recorder.py`、`websocket_policy_client.py`、`ws_policy_protocol.py` | `/home/agilex/piper-openpi-real-robot/models/openpi_pi05/client/` | 创建该模型目录；不要混入 FastWAM client。 |
+| WAM / UVA-DiT | `camera_video_recorder.py`、`piper_start_pose.py`、`piper_state_history.py`、`trajectory_hdf5_recorder.py`、`websocket_policy_client.py`、`ws_policy_protocol.py` | `/home/agilex/piper-openpi-real-robot/scripts/` | 这是为兼容已有机器人环境保留的路径；另需现场已有 `/home/agilex/piper-openpi-real-robot/configs/piper_uva_dit_puzzle_b_left_observation_pose.json`。 |
+| FastWAM | `camera_video_recorder.py`、`piper_start_pose.py`、`websocket_policy_client.py`、`ws_policy_protocol.py`、`piper_fastwam_puzzle_start_pose.json` | `/home/agilex/piper-openpi-real-robot/models/fastwam/client/` | `piper_fastwam_puzzle_start_pose.json` 是“先复位再执行”时需要的起始位配置。 |
+
+FastWAM 示例：
+
+```bash
+ssh agilex@<robot-ip> \
+  'mkdir -p /home/agilex/piper-openpi-real-robot/models/fastwam/client'
+
+scp \
+  models/fastwam/client/camera_video_recorder.py \
+  models/fastwam/client/piper_start_pose.py \
+  models/fastwam/client/websocket_policy_client.py \
+  models/fastwam/client/ws_policy_protocol.py \
+  models/fastwam/client/piper_fastwam_puzzle_start_pose.json \
+  agilex@<robot-ip>:/home/agilex/piper-openpi-real-robot/models/fastwam/client/
+```
+
+三个模型各自的 server 部署、client 完整同步命令、checkpoint、录像和真机执行参数，
+仍以各自的模型 README 为准：
+[`OpenPI pi0.5`](models/openpi_pi05/README.md)、
+[`WAM / UVA-DiT`](models/uva_dit/README.md)、
+[`FastWAM`](models/fastwam/README.md)。
 
 ## OpenPI pi0.5 三终端启动
 
