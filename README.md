@@ -15,11 +15,15 @@
 │   │   ├── README.md             pi0.5 完整部署说明
 │   │   ├── server/               OpenPI checkpoint server
 │   │   └── client/               Piper ROS client、协议、录像和测试
-│   └── uva_dit/
+│   ├── uva_dit/
 │       ├── README.md             WAM/UVA-DiT 完整部署说明
 │       ├── server/               Puzzle checkpoint server、启动器和测试
 │       ├── client/               Piper ROS client、录制/replay 和测试
 │       └── requirements-piper.txt
+│   └── fastwam/
+│       ├── README.md             FastWAM Puzzle/crimp 完整部署说明
+│       ├── server/               protected/raw server、配置和测试
+│       └── client/               Piper ROS client、复位、录像和测试
 └── reference/                    公共底层 WebSocket、ROS/CAN 参考代码
 ```
 
@@ -27,13 +31,14 @@
 | --- | --- | --- | --- |
 | OpenPI pi0.5 | `models/openpi_pi05/server/` | `models/openpi_pi05/client/` | [`models/openpi_pi05/README.md`](models/openpi_pi05/README.md) |
 | WAM / UVA-DiT | `models/uva_dit/server/` | `models/uva_dit/client/` | [`models/uva_dit/README.md`](models/uva_dit/README.md) |
+| FastWAM Puzzle/crimp | `models/fastwam/server/` | `models/fastwam/client/` | [`models/fastwam/README.md`](models/fastwam/README.md) |
 
 模型权重、训练代码、HDF5 轨迹和视频不进入 Git。不要混用不同模型目录中的
 server 与 client。
 
 ## 公共三端拓扑
 
-两种模型使用相同的三端角色，但监听地址和 SSH 端口由各模型的实际命令决定：
+不同模型使用相同的三端角色，但监听地址和 SSH 端口由各模型的实际命令决定：
 
 ```text
 机器人端 client
@@ -48,8 +53,9 @@ server 与 client。
 ```
 
 pi0.5 当前使用 SSH `3763` 和 `10.13.10.63:18001`；UVA-DiT 当前使用 SSH
-`7156` 和 `10.13.0.133:17081`。网络变化时需同时替换 tunnel bind 地址和机器人
-命令中的 WebSocket URI。
+`7156` 和 `10.13.0.133:17081`；FastWAM 当前使用 SSH `7156` 和
+`10.13.0.96:18001`。网络变化时需同时替换 tunnel bind 地址和机器人命令中的
+WebSocket URI。
 
 启动任一模型前，先按照
 [`docs/agilex_robot_ros_startup.md`](docs/agilex_robot_ros_startup.md) 初始化 Piper，
@@ -205,6 +211,60 @@ python3 scripts/websocket_policy_client.py \
 
 WAM 的 checkpoint 配置、安全 hold、state history、轨迹录制和 replay 说明见
 [`models/uva_dit/README.md`](models/uva_dit/README.md)。
+
+## FastWAM Puzzle/crimp 三终端启动
+
+下面是 FastWAM 单步 dry-run。它使用真实图像、状态和 checkpoint，但终端 3 使用
+`--executor mock`，不会发布机械臂 action。FastWAM 有标准保护模式和人工监护原样模式；
+此处默认标准保护模式。完整执行、原样模式、起始位、录像和 checkpoint 切换见
+[`models/fastwam/README.md`](models/fastwam/README.md)。
+
+### FastWAM 终端 1：标准保护 Policy Server
+
+在本地电脑执行：
+
+```bash
+ssh -F /dev/null -tt -p 7156 root@10.40.1.215 \
+  'cd /bh/zbh_self/projects/piper-openpi-real-robot/models/fastwam/server && \
+   CUDA_VISIBLE_DEVICES=0 exec bash run_piper_fastwam_server.sh'
+```
+
+### FastWAM 终端 2：SSH Tunnel
+
+在本地电脑另一终端执行并保持运行：
+
+```bash
+ssh -F /dev/null -N -g -p 7156 \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -L 0.0.0.0:18001:127.0.0.1:7081 \
+  root@10.40.1.215
+```
+
+### FastWAM 终端 3：机器人 Dry-run Client
+
+```bash
+ssh -tt agilex@10.13.0.155 '
+source /opt/ros/noetic/setup.bash
+source /home/agilex/cobot_magic/Piper_ros_private-ros-noetic/devel/setup.bash
+
+/home/agilex/miniconda3/envs/xrocs-env/bin/python \
+  /home/agilex/piper-openpi-real-robot/models/fastwam/client/websocket_policy_client.py \
+  --uri ws://10.13.0.96:18001 \
+  --instruction crimp \
+  --source ros \
+  --executor mock \
+  --max-steps 1 \
+  --control-hz 30 \
+  --compressed-images \
+  --transport-image-profile fastwam \
+  --require-images \
+  --camera-topic head=/camera_f/color/image_raw/compressed \
+  --camera-topic left_wrist=/camera_l/color/image_raw/compressed \
+  --camera-topic right_wrist=/camera_r/color/image_raw/compressed
+'
+```
 
 ## pi0.5 切换到真机执行
 
