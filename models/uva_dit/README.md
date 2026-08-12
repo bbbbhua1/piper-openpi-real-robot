@@ -1,6 +1,6 @@
 # Piper Puzzle UVA-DiT / WAM 真机部署
 
-这个目录提供 Puzzle 0809-B 与 Puzzle 0811-C checkpoint 在松灵 Piper 真机上的
+这个目录提供 Puzzle 0809-B、0811-C 与当前 0812-E checkpoint 在松灵 Piper 真机上的
 推理 server、机器人 client、轨迹录制和 replay 工具。它从
 `UVA_dit/realmachine_deploy_v2/piper` 提取，作为 WAM 的 Piper 部署适配层。
 
@@ -35,24 +35,28 @@ server 与 client 共同保持 Piper 的 ROS topic、相机传输和动作 respo
 /bh/zbh_self/projects/UVA_dit
 ```
 
-机器人端保持同样的模型目录：
+仓库源码按模型保存在 `models/uva_dit/client/`。当前机器人运行环境沿用兼容部署
+路径：
 
 ```text
-/home/agilex/piper-openpi-real-robot/models/uva_dit/client
+/home/agilex/piper-openpi-real-robot/scripts
+/home/agilex/piper-openpi-real-robot/configs
 ```
 
-从仓库根目录部署机器人 client：
+从仓库根目录更新机器人 client：
 
 ```bash
 ssh agilex@10.13.11.215 \
-  'mkdir -p /home/agilex/piper-openpi-real-robot/models/uva_dit/client /home/agilex/piper-openpi-real-robot/recordings'
+  'mkdir -p /home/agilex/piper-openpi-real-robot/scripts /home/agilex/piper-openpi-real-robot/configs /home/agilex/piper-openpi-real-robot/recordings'
 
 scp models/uva_dit/client/*.py \
-  agilex@10.13.11.215:/home/agilex/piper-openpi-real-robot/models/uva_dit/client/
+  agilex@10.13.11.215:/home/agilex/piper-openpi-real-robot/scripts/
 ```
 
 这里复制整个 client 目录中的 Python 文件，确保主 client 的相机、state history、
-start pose、轨迹记录和 WebSocket 协议依赖同时更新。
+start pose、轨迹记录和 WebSocket 协议依赖同时更新。启动真机前还必须单独确认
+机器人已有 `configs/piper_uva_dit_puzzle_b_left_observation_pose.json`；该现场配置
+当前不在本仓库中。
 
 ## 训练/推理契约
 
@@ -285,7 +289,8 @@ MAX_JOINT_STEP=0.10 \
 bash models/uva_dit/server/run_piper_puzzle_policy_server.sh
 ```
 
-Puzzle 0811-C 的推荐启动器已经固定 C 的 checkpoint、配套 norm stats 和
+以下 Puzzle 0811-C 启动器作为历史兼容入口保留；当前 0812-E 真机运行参数以
+下一节“三终端真机链路”为准。0811-C 启动器固定 C 的 checkpoint、配套 norm stats 和
 `EXECUTE_STEPS=24`。它每次预测 32 个绝对关节位置 waypoint，只下发前 24
 个；随后以新观测和当前 state 重新预测，且 server 会保留最后 16 个已下发
 的真实机器人 state 作为 causal action-condition history。Piper client 需要
@@ -304,80 +309,83 @@ server 默认监听 `ws://0.0.0.0:7081`。checkpoint 不在此机器时，先把
 
 ## 三终端真机链路
 
-先按照终端 1、2、3 的顺序完成单步 dry-run。终端 3 使用真实 ROS observation
-和真实三路相机，但 `--executor mock` 不会发布机械臂 action。
+下面是 Puzzle 0812-E checkpoint 的当前真机执行流程。终端 3 使用真实 ROS
+observation、三路相机并发布机械臂 action，不是 dry-run。执行前必须完成现场
+净空、急停、起始位姿、checkpoint 和 action 检查。
+
+机器人目录中需要已经部署 `scripts/websocket_policy_client.py` 及其同目录依赖，
+并存在 `configs/piper_uva_dit_puzzle_b_left_observation_pose.json`。
 
 ### 终端 1：启动 WAM Policy Server
 
-在本地电脑执行：
+在开发服务器执行：
 
 ```bash
-ssh -F /dev/null -p 3763 -tt root@10.40.1.215 "\
-cd /bh/zbh_self/projects/piper-openpi-real-robot && \
-UVA_DIT_ROOT=/bh/zbh_self/projects/UVA_dit \
+cd /bh/zbh_self/projects/UVA_dit
+
 GPU=0 \
 HOST=127.0.0.1 \
 PORT=7081 \
-exec bash models/uva_dit/server/run_piper_puzzle_c_noar_policy_server.sh"
-```
-
-如果启动器内默认 artifact 路径不适用于当前服务器，在 `exec bash` 前显式设置：
-
-```text
-RUN_DIR=/path/to/puzzle-run
-CKPT_NAME=checkpoint_step_<step>
-NORM_STATS=/path/to/norm-stats.pt
-PRETRAINED=/path/to/unidit-base
-QWEN35=/path/to/Qwen3.5-9B
+RUN_DIR=/bh/media/unify/joyzhang/checkpoints_unidit_ur_usb/puzzle_0812_E_from_0811Cbest_circle0805_0810_new70_old30_p2p_noar_grasp25_place25_righthead_lr5e7_1k_port23456 \
+CKPT_NAME=checkpoint_final \
+NORM_STATS=/bh/media/unify/joyzhang/checkpoints_unidit_ur_usb/pertask_norm_stats_puzzle_circle_0805_0810_train1650_mask14_p2p_armsgrip_gripfull.pt \
+EXECUTE_STEPS=8 \
+REPLAN_EVERY_CALL=0 \
+ACTION_DT=0.067 \
+RAW_ACTION_STEPS=8 \
+INACTIVE_ACTION_MODE=hold \
+STATE_OOB_MODE=clip \
+ACTION_OUTPUT_CLIP=0 \
+MAX_JOINT_STEP=0.10 \
+ACTION_LATENT_FP32=1 \
+ACTION_SMOOTH_WINDOW=11 \
+ACTION_SMOOTH_POLY=2 \
+ACTION_SMOOTH_GRIPPERS=0 \
+bash realmachine_deploy_v2/piper/server/run_piper_puzzle_c_noar_policy_server.sh
 ```
 
 ### 终端 2：建立 SSH Tunnel
 
-在本地电脑另开终端并保持运行：
+在本地电脑执行并保持运行：
 
 ```bash
-ssh -F /dev/null -p 3763 -N -g \
-  -o ExitOnForwardFailure=yes \
-  -o StrictHostKeyChecking=accept-new \
-  -o ServerAliveInterval=15 \
-  -o ServerAliveCountMax=3 \
-  -L 0.0.0.0:18001:127.0.0.1:7081 \
+ssh -o ExitOnForwardFailure=yes \
+  -p 7156 \
+  -N \
+  -L 10.13.0.133:17081:127.0.0.1:7081 \
   root@10.40.1.215
 ```
 
-### 终端 3：机器人 Dry-run Client
+### 终端 3：机器人真机 Client
+
+在机器人端执行：
 
 ```bash
-ssh -A -tt agilex@10.13.11.215 "\
-source /opt/ros/noetic/setup.bash && \
-source /home/agilex/agilex_ws/devel/setup.bash && \
-source /home/agilex/cobot_magic/camera_ws/devel/setup.bash && \
-source /home/agilex/cobot_magic/Piper_ros_private-ros-noetic/devel/setup.bash && \
-exec /home/agilex/miniconda3/envs/xrocs-env/bin/python \
-/home/agilex/piper-openpi-real-robot/models/uva_dit/client/websocket_policy_client.py \
---uri ws://10.13.10.63:18001 \
---instruction '拼图（圆形）' \
---source ros \
---executor mock \
---max-steps 1 \
---camera-topic head=/camera_f/color/image_raw/compressed \
---camera-topic left_wrist=/camera_l/color/image_raw/compressed \
---camera-topic right_wrist=/camera_r/color/image_raw/compressed \
---compressed-images \
---require-images"
+cd /home/agilex/piper-openpi-real-robot
+
+source /home/agilex/cobot_magic/Piper_ros_private-ros-noetic/devel/setup.bash
+
+python3 scripts/websocket_policy_client.py \
+  --uri ws://10.13.0.133:17081 \
+  --instruction '拼图（圆形）' \
+  --source ros \
+  --executor ros \
+  --execute-actions \
+  --no-home-on-start \
+  --left-observation-pose configs/piper_uva_dit_puzzle_b_left_observation_pose.json \
+  --home-right-on-start \
+  --transport-image-profile fastwam \
+  --compressed-images \
+  --require-images \
+  --camera-topic head=/camera_f/color/image_raw/compressed \
+  --camera-topic left_wrist=/camera_l/color/image_raw/compressed \
+  --camera-topic right_wrist=/camera_r/color/image_raw/compressed \
+  --publish-hz 100 \
+  --record-videos \
+  --record-trajectory \
+  --record-dir /home/agilex/piper-openpi-real-robot/recordings \
+  --record-session-name piper_c_$(date +%Y%m%d_%H%M%S)
 ```
-
-确认单步返回的 left side hold、右臂 action、state history 和 timing 合理后，终端 1
-与终端 2 保持不变；终端 3 将 `--executor mock --max-steps 1` 替换为：
-
-```text
---executor ros
---execute-actions
---enable-on-start
-```
-
-首次执行继续保持 `INACTIVE_ACTION_MODE=hold`，设置保守的 `MAX_JOINT_STEP`，并
-确认机器人起始位姿与 Puzzle train406 数据分布一致。
 
 ## 不加载模型的协议测试
 
