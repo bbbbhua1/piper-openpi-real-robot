@@ -1,0 +1,51 @@
+# FastWAM policy deployment for the real Piper Puzzle/"crimp" task.
+#
+# This file deliberately does NOT contain generic Piper motion limits. Before
+# physical inference, obtain the active robot's fourteen lower/upper limits and
+# per-waypoint maximum deltas from its driver/URDF, then fill all three fields.
+# The server refuses to listen while any of them is absent or invalid.
+fastwam_root: /bh/zbh_self/projects/fastwam
+# Wan base assets are large and must never be cached inside this deployment
+# project. The FastWAM runtime maps this to DIFFSYNTH_MODEL_BASE_PATH.
+model_base_path: /bh/zbh_ckp/models/fastwam
+sim_config_name: sim_robotwin.yaml
+task_name: agilex_cobotmagic2_puzzle_joint_3cam_384_1e-4_baidu32
+checkpoint_path: /bh/zbh_ckp/runs/fastwam/agilex_cobotmagic2_puzzle_joint_3cam_384_1e-4_baidu32_statecontinue30000_wandb/CogWAM_fastWAM-puzzle-statecontinue32-30000-wandb-retry2/checkpoints/weights/step_005000.pt
+dataset_stats_path: /bh/zbh_ckp/datasets/fastwam/agilex_cobotmagic2_puzzle_20260801_v21_puppet_joint/normalization/dataset_stats.json
+task_label: crimp
+
+# The model always predicts 32 candidates. The robot executes a 24-waypoint
+# rolling-plan chunk (0.8 s at 30 Hz), then obtains a fresh observation and
+# predicts the next chunk. Every one of the 24 published waypoints is checked
+# against the hardware limits before it is returned to the robot client.
+model_action_horizon: 32
+num_video_frames: 9
+num_inference_steps: 10
+seed: 42
+device: cuda:0
+host: 127.0.0.1
+port: 7081
+execution_horizon: 24
+action_dt: 0.0333333333
+max_inference_latency_s: 5.0
+
+# Incoming ROS/OpenCV camera arrays are BGR. JPEG payloads are decoded to RGB
+# before the runtime regardless of this setting.
+input_color: bgr
+max_message_size_mb: 64
+ping_interval_s: 20
+ping_timeout_s: 60
+
+# Piper wire order: [L1,L2,L3,L4,L5,L6,Lg,R1,R2,R3,R4,R5,R6,Rg].
+# Verified on the active robot on 2026-08-04 by querying the Piper CAN motor
+# limits (angles converted from 0.1 degrees to radians).  The active driver
+# accepts gripper commands in [0.0, 0.08] metres.
+joint_lower: [-2.617993878, 0.0, -2.967059728, -1.745329252, -1.221730476, -3.141592654, 0.0, -2.617993878, 0.0, -2.967059728, -1.745329252, -1.221730476, -3.141592654, 0.0]
+joint_upper: [2.617993878, 3.141592654, 0.0, 1.745329252, 1.221730476, 3.141592654, 0.08, 2.617993878, 3.141592654, 0.0, 1.745329252, 1.221730476, 3.141592654, 0.08]
+# FastWAM runs at 30 Hz.  The 0.01-rad arm cap equals the queried 0.3-rad/s
+# hardware limit; 0.001 m is a conservative first-pass gripper increment.
+max_delta: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.001, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.001]
+# Finite diffusion outputs are first clamped to the verified physical endpoint,
+# then sequentially limited by the per-waypoint cap above. This matches the
+# Pi05 rate-clamp approach while retaining Piper's verified physical bounds.
+# Corrections are logged for diagnosis but never reject finite actions.

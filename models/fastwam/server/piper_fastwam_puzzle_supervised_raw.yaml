@@ -1,0 +1,23 @@
+# Human-supervised FastWAM mode: finite model waypoints are forwarded without
+# server-side joint projection or per-waypoint delta limiting. Do not use this
+# config as the default deployment; start it only with the supervised launcher.
+fastwam_root: /bh/zbh_self/projects/fastwam
+model_base_path: /bh/zbh_ckp/models/fastwam
+sim_config_name: sim_robotwin.yaml
+task_name: agilex_cobotmagic2_puzzle_joint_3cam_384_1e-4_baidu32
+checkpoint_path: /bh/zbh_ckp/runs/fastwam/agilex_cobotmagic2_puzzle_joint_3cam_384_1e-4_baidu32_statecontinue30000_wandb/CogWAM_fastWAM-puzzle-statecontinue32-30000-wandb-retry2/checkpoints/weights/step_005000.pt
+dataset_stats_path: /bh/zbh_ckp/datasets/fastwam/agilex_cobotmagic2_puzzle_20260801_v21_puppet_joint/normalization/dataset_stats.json
+task_label: crimp
+model_action_horizon: 32
+num_video_frames: 9
+num_inference_steps: 10
+seed: 42
+device: cuda:0
+host: 127.0.0.1
+port: 7081
+execution_horizon: 24
+action_dt: 0.0333333333
+input_color: bgr
+max_message_size_mb: 64
+ping_interval_s: 20
+ping_timeout_s: 60
