@@ -1,12 +1,15 @@
 # Reference Scripts
 
-这个目录保留 `/Users/hua/Downloads/websocket真机` 中的基础流程脚本。它们不是当前 OpenPI 三端运行链路的必需文件，而是以后换机器、换模型、重新梳理底层 ROS/CAN 流程时的参考材料。
+这个目录保留 `/Users/hua/Downloads/websocket真机` 中的基础流程脚本。它们不是当前模型部署链路的必需文件，而是以后换机器、换模型、重新梳理底层 ROS/CAN 流程时的参考材料。
 
 当前主流程仍然是：
 
-1. 服务器端运行 `scripts/piper_openpi_policy_server.py`。
+1. 服务器端运行所选模型 `models/<model>/server/` 中的 policy server。
 2. 本地电脑开启 SSH tunnel。
-3. 机器人端运行 `scripts/websocket_policy_client.py`。
+3. 机器人端运行同一模型 `models/<model>/client/` 中的 WebSocket client。
+
+当前模型目录是 `models/openpi_pi05/` 和 `models/uva_dit/`，不能交叉混用
+server/client。具体三终端命令以根 README 和各模型 README 为准。
 
 ## `basic_websocket_flow/`
 

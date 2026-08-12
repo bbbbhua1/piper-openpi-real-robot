@@ -11,9 +11,8 @@ import types
 import unittest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS_DIR = REPO_ROOT / "scripts"
-sys.path.insert(0, str(SCRIPTS_DIR))
+CLIENT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(CLIENT_DIR))
 
 from camera_video_recorder import CameraVideoRecorder  # noqa: E402
 

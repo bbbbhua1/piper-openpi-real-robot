@@ -26,6 +26,34 @@ client/   机器人 client、WebSocket 协议、状态历史、位姿和视频�
 
 server 与 client 共同保持 Piper 的 ROS topic、相机传输和动作 response 格式兼容。
 
+## 部署目录
+
+开发服务器需要同时存在本仓库和完整 `UVA_dit` checkout，例如：
+
+```text
+/bh/zbh_self/projects/piper-openpi-real-robot
+/bh/zbh_self/projects/UVA_dit
+```
+
+机器人端保持同样的模型目录：
+
+```text
+/home/agilex/piper-openpi-real-robot/models/uva_dit/client
+```
+
+从仓库根目录部署机器人 client：
+
+```bash
+ssh agilex@10.13.11.215 \
+  'mkdir -p /home/agilex/piper-openpi-real-robot/models/uva_dit/client /home/agilex/piper-openpi-real-robot/recordings'
+
+scp models/uva_dit/client/*.py \
+  agilex@10.13.11.215:/home/agilex/piper-openpi-real-robot/models/uva_dit/client/
+```
+
+这里复制整个 client 目录中的 Python 文件，确保主 client 的相机、state history、
+start pose、轨迹记录和 WebSocket 协议依赖同时更新。
+
 ## 训练/推理契约
 
 已支持的训练契约为：
@@ -273,6 +301,83 @@ bash models/uva_dit/server/run_piper_puzzle_c_noar_policy_server.sh
 环境变量仍可覆盖，例如 `GPU=1` 或 `PORT=7082`。
 
 server 默认监听 `ws://0.0.0.0:7081`。checkpoint 不在此机器时，先把大文件放到 `/bh/zbh_ckp/checkpoints` 或 `/bh/zbh_ckp/models` 后再启动。
+
+## 三终端真机链路
+
+先按照终端 1、2、3 的顺序完成单步 dry-run。终端 3 使用真实 ROS observation
+和真实三路相机，但 `--executor mock` 不会发布机械臂 action。
+
+### 终端 1：启动 WAM Policy Server
+
+在本地电脑执行：
+
+```bash
+ssh -F /dev/null -p 3763 -tt root@10.40.1.215 "\
+cd /bh/zbh_self/projects/piper-openpi-real-robot && \
+UVA_DIT_ROOT=/bh/zbh_self/projects/UVA_dit \
+GPU=0 \
+HOST=127.0.0.1 \
+PORT=7081 \
+exec bash models/uva_dit/server/run_piper_puzzle_c_noar_policy_server.sh"
+```
+
+如果启动器内默认 artifact 路径不适用于当前服务器，在 `exec bash` 前显式设置：
+
+```text
+RUN_DIR=/path/to/puzzle-run
+CKPT_NAME=checkpoint_step_<step>
+NORM_STATS=/path/to/norm-stats.pt
+PRETRAINED=/path/to/unidit-base
+QWEN35=/path/to/Qwen3.5-9B
+```
+
+### 终端 2：建立 SSH Tunnel
+
+在本地电脑另开终端并保持运行：
+
+```bash
+ssh -F /dev/null -p 3763 -N -g \
+  -o ExitOnForwardFailure=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -o ServerAliveInterval=15 \
+  -o ServerAliveCountMax=3 \
+  -L 0.0.0.0:18001:127.0.0.1:7081 \
+  root@10.40.1.215
+```
+
+### 终端 3：机器人 Dry-run Client
+
+```bash
+ssh -A -tt agilex@10.13.11.215 "\
+source /opt/ros/noetic/setup.bash && \
+source /home/agilex/agilex_ws/devel/setup.bash && \
+source /home/agilex/cobot_magic/camera_ws/devel/setup.bash && \
+source /home/agilex/cobot_magic/Piper_ros_private-ros-noetic/devel/setup.bash && \
+exec /home/agilex/miniconda3/envs/xrocs-env/bin/python \
+/home/agilex/piper-openpi-real-robot/models/uva_dit/client/websocket_policy_client.py \
+--uri ws://10.13.10.63:18001 \
+--instruction '拼图（圆形）' \
+--source ros \
+--executor mock \
+--max-steps 1 \
+--camera-topic head=/camera_f/color/image_raw/compressed \
+--camera-topic left_wrist=/camera_l/color/image_raw/compressed \
+--camera-topic right_wrist=/camera_r/color/image_raw/compressed \
+--compressed-images \
+--require-images"
+```
+
+确认单步返回的 left side hold、右臂 action、state history 和 timing 合理后，终端 1
+与终端 2 保持不变；终端 3 将 `--executor mock --max-steps 1` 替换为：
+
+```text
+--executor ros
+--execute-actions
+--enable-on-start
+```
+
+首次执行继续保持 `INACTIVE_ACTION_MODE=hold`，设置保守的 `MAX_JOINT_STEP`，并
+确认机器人起始位姿与 Puzzle train406 数据分布一致。
 
 ## 不加载模型的协议测试
 
