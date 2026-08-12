@@ -1,0 +1,18 @@
+# Runtime-only dependencies for the Piper Puzzle 0809-B UVA-DiT server.
+# PyTorch is intentionally omitted: create the environment by cloning the
+# local torch-cu121 environment so the CUDA-matched wheel is preserved.
+numpy>=1.26,<2.0
+accelerate>=1.0
+h5py>=3.8,<4
+diffusers>=0.28
+easydict>=1.13
+einops>=0.8
+fastapi>=0.110
+msgpack>=1.0,<2
+opencv-python-headless>=4.10,<5
+pydantic>=2,<3
+safetensors>=0.4
+sentencepiece>=0.2
+transformers==5.9.0
+uvicorn>=0.29
+websockets>=14,<16

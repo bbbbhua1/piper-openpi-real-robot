@@ -11,7 +11,11 @@ env/
 .vscode/
 
 *.log
+*.h5
+*.hdf5
 logs/
+record/
+recordings/
 received_images/
 outputs/
 artifacts/

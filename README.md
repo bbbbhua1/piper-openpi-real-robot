@@ -1,6 +1,16 @@
-# Piper OpenPI Real Robot Workflow
+# Piper Real Robot Model Workflows
 
-这个仓库保存松灵 Piper 双臂机器人运行 OpenPI checkpoint 的完整真机流程。当前链路是：
+这个仓库保存松灵 Piper 双臂机器人运行不同模型 checkpoint 的真机部署流程。
+目前包含两条相互独立、共享 Piper ROS/WebSocket 约定的链路：
+
+- **OpenPI pi0.5**：原有完整流程，脚本位于 `scripts/`，操作说明在本页。
+- **UVA-DiT / WAM**：Puzzle checkpoint 的 server、机器人 client、录制与 replay
+  工具位于 [`models/uva_dit/`](models/uva_dit/README.md)。
+
+不要混用不同模型的 server 和 client。模型权重、训练代码、HDF5 轨迹和视频均不
+进入本仓库；各模型目录只保存 Piper 部署适配层与可复现的操作细节。
+
+以下是已经验证的 OpenPI pi0.5 链路：
 
 - 开发服务器使用一张 A800 加载 OpenPI checkpoint，运行 JSON WebSocket policy server。
 - 本地电脑通过 SSH tunnel，把机器人可访问的本地端口转发到服务器。
@@ -20,6 +30,12 @@
 │   ├── agilex_robot_ros_startup.md
 │   ├── architecture.md
 │   └── setup_robot_init_todo.md
+├── models
+│   └── uva_dit
+│       ├── README.md
+│       ├── client
+│       ├── server
+│       └── requirements-piper.txt
 ├── reference
 │   ├── README.md
 │   ├── basic_websocket_flow
