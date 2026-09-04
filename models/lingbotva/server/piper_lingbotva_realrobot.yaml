@@ -1,0 +1,29 @@
+# LingBot-VA deployment for the Piper real-robot jigsaw checkpoint.
+lingbot_va_root: /bh/zbh_self/projects/lingbot-va-official
+model_path: /bh/media/ZBH/lingbot-va-realrobot-ft-step17000-inference-20260831
+action_norm_path: /bh/media/ZBH/lingbot-va-realrobot-ft-step17000-inference-20260831/action_norm.json
+save_root: /tmp/lingbotva-realrobot
+
+device: cuda:0
+host: 127.0.0.1
+port: 7084
+# The 80GB deployment GPU fits the transformer, VAE and text encoder. Keeping
+# them resident avoids the multi-minute CPU/GPU transfers seen with offload.
+enable_offload: false
+num_inference_steps: 25
+action_num_inference_steps: 50
+guidance_scale: 5.0
+action_guidance_scale: 1.0
+
+# The model emits 32 action waypoints: 2 latent frames x 16 actions/frame.
+execution_horizon: 32
+action_dt: 0.0333333333
+max_inference_latency_s: 120.0
+input_color: bgr
+instruction: Complete the jigsaw puzzle on the table.
+max_message_size_mb: 64
+
+# Piper wire order: [L1..L6, Lg, R1..R6, Rg].
+joint_lower: [-2.617993878, 0.0, -2.967059728, -1.745329252, -1.221730476, -3.141592654, 0.0, -2.617993878, 0.0, -2.967059728, -1.745329252, -1.221730476, -3.141592654, 0.0]
+joint_upper: [2.617993878, 3.141592654, 0.0, 1.745329252, 1.221730476, 3.141592654, 0.08, 2.617993878, 3.141592654, 0.0, 1.745329252, 1.221730476, 3.141592654, 0.08]
+max_delta: [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.001, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.001]

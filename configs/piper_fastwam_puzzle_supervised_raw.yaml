@@ -1,0 +1,26 @@
+# Human-supervised FastWAM mode for the realrobot single-task checkpoint:
+# finite model waypoints are forwarded without
+# server-side joint projection or per-waypoint delta limiting. Do not use this
+# config as the default deployment; start it only with the supervised launcher.
+fastwam_root: /bh/zbh_self/projects/fastwam-official
+model_base_path: /bh/zbh_ckp/models/fastwam
+sim_config_name: sim_robotwin.yaml
+task_name: realrobot_joint_3cam_384_chunk64_1e-4
+checkpoint_path: /bh/media/ZBH/fastwam-realrobot-ft-2node8gpu-bs1-chunk64-15ep-v2/checkpoints/weights/step_150000.pt
+dataset_stats_path: /bh/media/ZBH/fastwam-realrobot-ft-2node8gpu-bs1-chunk64-15ep-v2/dataset_stats.json
+task_label: Assemble the puzzle pieces on the table to complete the puzzle
+prompt_template: "A video recorded from a robot's point of view executing the following instruction: {task}"
+model_joint_order: piper_wire
+model_action_horizon: 64
+num_video_frames: 17
+num_inference_steps: 10
+seed: 42
+device: cuda:0
+host: 127.0.0.1
+port: 7083
+execution_horizon: 64
+action_dt: 0.0333333333
+input_color: bgr
+max_message_size_mb: 64
+ping_interval_s: 20
+ping_timeout_s: 60

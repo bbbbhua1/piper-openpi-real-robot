@@ -1,0 +1,26 @@
+# Pi05 real-robot Domino deployment.
+# The latest complete checkpoint inspected on 2026-09-03 is step 80000.
+openpi_root: /bh/zbh_self/projects/openpi-official
+config: pi05_realrobot
+checkpoint: /bh/media/ZBH/pi05_domino_realrobot_jax_ft_8xA800_20260901/checkpoints/pi05_realrobot/pi05-domino-jax-8xa800-100k-20260901-r1-multiroot/80000
+
+task_label: Arrange the dominoes on the table in a horizontal row and then knock them over
+host: 127.0.0.1
+port: 7081
+num_infer_steps: 10
+horizon: 50
+action_dt: 0.1
+state_left_dim: 7
+state_right_dim: 7
+left_arm_dim: 7
+right_arm_dim: 7
+input_color: bgr
+max_size_mb: 64
+
+# Piper wire order: [L1,L2,L3,L4,L5,L6,Lg,R1,R2,R3,R4,R5,R6,Rg].
+# These values mirror configs/piper_fastwam_puzzle.yaml.
+joint_lower: [-2.617993878, 0.0, -2.967059728, -1.745329252, -1.221730476, -3.141592654, 0.0, -2.617993878, 0.0, -2.967059728, -1.745329252, -1.221730476, -3.141592654, 0.0]
+joint_upper: [2.617993878, 3.141592654, 0.0, 1.745329252, 1.221730476, 3.141592654, 0.08, 2.617993878, 3.141592654, 0.0, 1.745329252, 1.221730476, 3.141592654, 0.08]
+# This matches the current reference config. With 100, delta limiting is
+# effectively disabled while absolute joint limits remain active.
+max_delta: [100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0]
