@@ -1,0 +1,7 @@
+# Runtime dependencies for the FastWAM Piper client.
+# ROS packages (rospy, sensor_msgs, piper_msgs, cv_bridge) come from the
+# robot's ROS Noetic workspace and are intentionally not installed by pip.
+numpy>=1.24,<2.0
+opencv-python-headless>=4.8,<5
+Pillow>=9.0
+websockets>=14,<16

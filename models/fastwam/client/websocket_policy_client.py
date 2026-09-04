@@ -129,80 +129,6 @@ def _build_time_list(action: Dict[str, Any], num_waypoints: int, default_dt: flo
     return time_list
 
 
-def _lerp(start: Sequence[float], end: Sequence[float], alpha: float) -> List[float]:
-    return [(1.0 - alpha) * a + alpha * b for a, b in zip(start, end)]
-
-
-def _embedded_gripper_index(values: Sequence[float]) -> Optional[int]:
-    if len(values) >= 7:
-        return len(values) - 1
-    return None
-
-
-def _lerp_joints(
-    start: Sequence[float],
-    end: Sequence[float],
-    alpha: float,
-    *,
-    smooth_gripper: bool,
-    snap_gripper: bool,
-    stepwise_all: bool = False,
-) -> List[float]:
-    if smooth_gripper:
-        return _lerp(start, end, alpha)
-    if stepwise_all:
-        return list(end) if snap_gripper else list(start)
-    gripper_index = _embedded_gripper_index(start)
-    if gripper_index is None or gripper_index >= len(end):
-        return _lerp(start, end, alpha)
-    joints = _lerp(start[:gripper_index], end[:gripper_index], alpha)
-    gripper = end[gripper_index] if snap_gripper else start[gripper_index]
-    return joints + [float(gripper)] + list(start[gripper_index + 1 :])
-
-
-def _interpolate_waypoints(
-    waypoints: List[List[float]],
-    time_list: List[float],
-    factor: int,
-    *,
-    smooth_gripper: bool = True,
-    stepwise_all: bool = False,
-) -> Tuple[List[List[float]], List[float]]:
-    if factor == 1 or len(waypoints) < 2:
-        return waypoints, list(time_list)
-
-    interpolated = [list(waypoints[0])]
-    interpolated_times = [float(time_list[0])]
-    for index in range(len(waypoints) - 1):
-        start = waypoints[index]
-        end = waypoints[index + 1]
-        start_time = time_list[index]
-        end_time = time_list[index + 1]
-        for step in range(1, factor + 1):
-            alpha = float(step) / float(factor)
-            interpolated.append(
-                _lerp_joints(
-                    start,
-                    end,
-                    alpha,
-                    smooth_gripper=smooth_gripper,
-                    snap_gripper=step == factor,
-                    stepwise_all=stepwise_all,
-                )
-            )
-            interpolated_times.append(start_time + alpha * (end_time - start_time))
-    return interpolated, interpolated_times
-
-
-def _validate_interp_factor(interp_factor: int) -> None:
-    if (
-        isinstance(interp_factor, bool)
-        or not isinstance(interp_factor, int)
-        or interp_factor <= 0
-    ):
-        raise ValueError("interp_factor must be a positive integer")
-
-
 def _smoothstep(value: float) -> float:
     value = max(0.0, min(1.0, value))
     return value * value * (3.0 - 2.0 * value)
@@ -217,19 +143,7 @@ def parse_chunked_action(
     default_dt: float,
     left_arm_dim: int = 7,
     right_arm_dim: int = 7,
-    max_waypoints: Optional[int] = None,
-    interp_factor: int = 1,
-    smooth_gripper: bool = False,
 ) -> Dict[str, Any]:
-    _validate_interp_factor(interp_factor)
-    if max_waypoints is not None:
-        if (
-            isinstance(max_waypoints, bool)
-            or not isinstance(max_waypoints, int)
-            or max_waypoints <= 0
-        ):
-            raise ValueError("max_waypoints must be a positive integer")
-
     if not isinstance(action, dict):
         raise ValueError("chunked action must be a dict, got {}".format(type(action).__name__))
 
@@ -257,246 +171,14 @@ def parse_chunked_action(
         if len(right_gripper_chunk) != num_waypoints:
             raise ValueError("right_gripper must have the same number of waypoints as right_arm")
 
-    time_list = _build_time_list(action, num_waypoints, default_dt)
-    source_num_waypoints = num_waypoints
-    if max_waypoints is not None:
-        num_waypoints = min(num_waypoints, max_waypoints)
-        left_arm_chunk = left_arm_chunk[:num_waypoints]
-        right_arm_chunk = right_arm_chunk[:num_waypoints]
-        time_list = time_list[:num_waypoints]
-        if left_gripper_chunk is not None:
-            left_gripper_chunk = left_gripper_chunk[:num_waypoints]
-        if right_gripper_chunk is not None:
-            right_gripper_chunk = right_gripper_chunk[:num_waypoints]
-
-    executed_waypoints = num_waypoints
-    if interp_factor > 1 and num_waypoints > 1:
-        left_arm_chunk, interpolated_times = _interpolate_waypoints(
-            left_arm_chunk,
-            time_list,
-            interp_factor,
-            smooth_gripper=smooth_gripper,
-        )
-        right_arm_chunk, _ = _interpolate_waypoints(
-            right_arm_chunk,
-            time_list,
-            interp_factor,
-            smooth_gripper=smooth_gripper,
-        )
-        if left_gripper_chunk is not None:
-            left_gripper_chunk, _ = _interpolate_waypoints(
-                left_gripper_chunk,
-                time_list,
-                interp_factor,
-                smooth_gripper=smooth_gripper,
-                stepwise_all=not smooth_gripper,
-            )
-        if right_gripper_chunk is not None:
-            right_gripper_chunk, _ = _interpolate_waypoints(
-                right_gripper_chunk,
-                time_list,
-                interp_factor,
-                smooth_gripper=smooth_gripper,
-                stepwise_all=not smooth_gripper,
-            )
-        time_list = interpolated_times
-        num_waypoints = len(left_arm_chunk)
-
     return {
         "left_arm": left_arm_chunk,
         "right_arm": right_arm_chunk,
         "left_gripper": left_gripper_chunk,
         "right_gripper": right_gripper_chunk,
-        "time_list": time_list,
+        "time_list": _build_time_list(action, num_waypoints, default_dt),
         "num_waypoints": num_waypoints,
-        "source_num_waypoints": source_num_waypoints,
-        "executed_waypoints": executed_waypoints,
-        "interp_factor": interp_factor,
-        "blend_steps": 0,
-        "smooth_gripper": smooth_gripper,
     }
-
-
-def _validate_blend_steps(blend_steps: int) -> None:
-    if (
-        isinstance(blend_steps, bool)
-        or not isinstance(blend_steps, int)
-        or blend_steps < 0
-    ):
-        raise ValueError("blend_steps must be a non-negative integer")
-
-
-def _merged_chunk_waypoint(
-    chunk: Dict[str, Any],
-    index: int,
-    left_arm_dim: int,
-    right_arm_dim: int,
-) -> Tuple[List[float], List[float]]:
-    left = list(chunk["left_arm"][index])
-    right = list(chunk["right_arm"][index])
-    if len(left) < left_arm_dim and chunk["left_gripper"] is not None:
-        left = left + [float(chunk["left_gripper"][index][0])]
-    if len(right) < right_arm_dim and chunk["right_gripper"] is not None:
-        right = right + [float(chunk["right_gripper"][index][0])]
-    return left, right
-
-
-def _chunk_step_dt(chunk: Dict[str, Any], default_dt: float) -> float:
-    time_list = chunk["time_list"]
-    if len(time_list) >= 2:
-        step_dt = time_list[1] - time_list[0]
-    elif time_list:
-        step_dt = time_list[0]
-    else:
-        step_dt = default_dt
-    if step_dt <= 0:
-        raise ValueError("blend step dt must be > 0, got {}".format(step_dt))
-    return step_dt
-
-
-def blend_action_chunks(
-    chunk: Dict[str, Any],
-    previous_left: Sequence[float],
-    previous_right: Sequence[float],
-    blend_steps: int,
-    default_dt: float,
-    left_arm_dim: int,
-    right_arm_dim: int,
-    smooth_gripper: bool = False,
-) -> Dict[str, Any]:
-    _validate_blend_steps(blend_steps)
-    blended = dict(chunk)
-    blended["blend_steps"] = blend_steps
-    if blend_steps == 0:
-        return blended
-
-    first_left, first_right = _merged_chunk_waypoint(
-        chunk, 0, left_arm_dim, right_arm_dim
-    )
-    previous_left = [float(value) for value in previous_left]
-    previous_right = [float(value) for value in previous_right]
-    if len(previous_left) != len(first_left) or len(previous_right) != len(first_right):
-        raise ValueError(
-            "previous chunk pose dims must match the next chunk: "
-            "left {} vs {}, right {} vs {}".format(
-                len(previous_left),
-                len(first_left),
-                len(previous_right),
-                len(first_right),
-            )
-        )
-
-    step_dt = _chunk_step_dt(chunk, default_dt)
-    blend_left = []
-    blend_right = []
-    blend_times = []
-    for step in range(1, blend_steps + 1):
-        alpha = float(step) / float(blend_steps)
-        snap_gripper = step == blend_steps
-        blend_left.append(
-            _lerp_joints(
-                previous_left,
-                first_left,
-                alpha,
-                smooth_gripper=smooth_gripper,
-                snap_gripper=snap_gripper,
-            )
-        )
-        blend_right.append(
-            _lerp_joints(
-                previous_right,
-                first_right,
-                alpha,
-                smooth_gripper=smooth_gripper,
-                snap_gripper=snap_gripper,
-            )
-        )
-        blend_times.append(step_dt * step)
-
-    rest_offset = blend_times[-1] - chunk["time_list"][0]
-    rest_left = []
-    rest_right = []
-    rest_times = []
-    for index in range(1, chunk["num_waypoints"]):
-        left, right = _merged_chunk_waypoint(
-            chunk, index, left_arm_dim, right_arm_dim
-        )
-        rest_left.append(left)
-        rest_right.append(right)
-        rest_times.append(chunk["time_list"][index] + rest_offset)
-
-    blended["left_arm"] = blend_left + rest_left
-    blended["right_arm"] = blend_right + rest_right
-    blended["left_gripper"] = None
-    blended["right_gripper"] = None
-    blended["time_list"] = blend_times + rest_times
-    blended["num_waypoints"] = len(blended["left_arm"])
-    blended["smooth_gripper"] = smooth_gripper
-    return blended
-
-
-def prepare_executed_chunk(
-    action: Dict[str, Any],
-    default_dt: float,
-    left_arm_dim: int,
-    right_arm_dim: int,
-    max_waypoints: Optional[int] = None,
-    interp_factor: int = 1,
-    blend_steps: int = 0,
-    smooth_gripper: bool = False,
-    previous_left: Optional[Sequence[float]] = None,
-    previous_right: Optional[Sequence[float]] = None,
-) -> Dict[str, Any]:
-    _validate_blend_steps(blend_steps)
-    chunk = parse_chunked_action(
-        action,
-        default_dt=default_dt,
-        left_arm_dim=left_arm_dim,
-        right_arm_dim=right_arm_dim,
-        max_waypoints=max_waypoints,
-        interp_factor=interp_factor,
-        smooth_gripper=smooth_gripper,
-    )
-    if (
-        blend_steps > 0
-        and previous_left is not None
-        and previous_right is not None
-    ):
-        chunk = blend_action_chunks(
-            chunk,
-            previous_left,
-            previous_right,
-            blend_steps,
-            default_dt,
-            left_arm_dim,
-            right_arm_dim,
-            smooth_gripper=smooth_gripper,
-        )
-    return chunk
-
-
-def log_executed_chunk(chunk: Dict[str, Any]) -> None:
-    if chunk["executed_waypoints"] < chunk["source_num_waypoints"]:
-        print(
-            "[execute] limiting action chunk to {}/{} waypoints".format(
-                chunk["executed_waypoints"], chunk["source_num_waypoints"]
-            )
-        )
-    if chunk["interp_factor"] > 1:
-        print(
-            "[execute] interpolated action chunk x{}".format(chunk["interp_factor"])
-        )
-    if chunk["blend_steps"] > 0:
-        print(
-            "[execute] blended from previous chunk with {} steps to {} waypoints".format(
-                chunk["blend_steps"],
-                chunk["num_waypoints"],
-            )
-        )
-    if (chunk["interp_factor"] > 1 or chunk["blend_steps"] > 0) and not chunk.get(
-        "smooth_gripper", False
-    ):
-        print("[execute] gripper held stepwise; only joints are smoothed")
 
 
 class MockObservationSource:
@@ -525,47 +207,18 @@ class MockObservationSource:
 
 
 class MockExecutor:
-    def __init__(
-        self,
-        chunk_dt: float,
-        left_arm_dim: int,
-        right_arm_dim: int,
-        max_waypoints: Optional[int] = None,
-        interp_factor: int = 1,
-        blend_steps: int = 0,
-        smooth_gripper: bool = False,
-    ) -> None:
+    def __init__(self, chunk_dt: float, left_arm_dim: int, right_arm_dim: int) -> None:
         self.chunk_dt = chunk_dt
         self.left_arm_dim = left_arm_dim
         self.right_arm_dim = right_arm_dim
-        self.max_waypoints = max_waypoints
-        self.interp_factor = interp_factor
-        self.blend_steps = blend_steps
-        self.smooth_gripper = smooth_gripper
-        self._last_published_target: Optional[Tuple[List[float], List[float]]] = None
 
     def execute_action(self, action: Dict[str, Any]) -> float:
-        previous = self._last_published_target
-        chunk = prepare_executed_chunk(
+        chunk = parse_chunked_action(
             action,
             default_dt=self.chunk_dt,
             left_arm_dim=self.left_arm_dim,
             right_arm_dim=self.right_arm_dim,
-            max_waypoints=self.max_waypoints,
-            interp_factor=self.interp_factor,
-            blend_steps=self.blend_steps,
-            smooth_gripper=self.smooth_gripper,
-            previous_left=None if previous is None else previous[0],
-            previous_right=None if previous is None else previous[1],
         )
-        log_executed_chunk(chunk)
-        last_left, last_right = _merged_chunk_waypoint(
-            chunk,
-            chunk["num_waypoints"] - 1,
-            self.left_arm_dim,
-            self.right_arm_dim,
-        )
-        self._last_published_target = (last_left, last_right)
         print(
             "[mock executor] {}".format(
                 json.dumps(
@@ -796,10 +449,6 @@ class RosJointExecutor:
         right_arm_dim: int,
         enable_on_start: bool,
         waypoint_sleep: float,
-        max_waypoints: Optional[int] = None,
-        interp_factor: int = 1,
-        blend_steps: int = 0,
-        smooth_gripper: bool = False,
     ) -> None:
         import rospy
         from sensor_msgs.msg import JointState
@@ -814,10 +463,6 @@ class RosJointExecutor:
         self.left_arm_dim = left_arm_dim
         self.right_arm_dim = right_arm_dim
         self.waypoint_sleep = waypoint_sleep
-        self.max_waypoints = max_waypoints
-        self.interp_factor = interp_factor
-        self.blend_steps = blend_steps
-        self.smooth_gripper = smooth_gripper
         self.Bool = Bool
         self.left_pub = rospy.Publisher(left_action_topic, JointState, queue_size=1, tcp_nodelay=True)
         self.right_pub = rospy.Publisher(right_action_topic, JointState, queue_size=1, tcp_nodelay=True)
@@ -1030,20 +675,13 @@ class RosJointExecutor:
         return arm
 
     def execute_action(self, action: Dict[str, Any]) -> float:
-        previous = self._last_published_target
-        chunk = prepare_executed_chunk(
+        chunk = parse_chunked_action(
             action,
             default_dt=self.chunk_dt,
             left_arm_dim=self.left_arm_dim,
             right_arm_dim=self.right_arm_dim,
-            max_waypoints=getattr(self, "max_waypoints", None),
-            interp_factor=getattr(self, "interp_factor", 1),
-            blend_steps=getattr(self, "blend_steps", 0),
-            smooth_gripper=getattr(self, "smooth_gripper", False),
-            previous_left=None if previous is None else previous[0],
-            previous_right=None if previous is None else previous[1],
         )
-        log_executed_chunk(chunk)
+
         previous_time = 0.0
         start_time = time.time()
         for index, arrival_time in enumerate(chunk["time_list"]):
@@ -1057,7 +695,6 @@ class RosJointExecutor:
             right = self._merge_gripper(chunk["right_arm"][index], chunk["right_gripper"], index)
             self.left_pub.publish(self._build_joint_msg(left))
             self.right_pub.publish(self._build_joint_msg(right))
-            self._last_published_target = (list(left), list(right))
             print(
                 "[execute] waypoint {}/{} published; sleep={:.3f}s".format(
                     index + 1,
@@ -1131,15 +768,7 @@ def create_source(args: argparse.Namespace) -> Any:
 def create_executor(args: argparse.Namespace) -> Any:
     chunk_dt = 1.0 / args.control_hz
     if args.executor == "mock":
-        return MockExecutor(
-            chunk_dt,
-            args.left_arm_dim,
-            args.right_arm_dim,
-            max_waypoints=args.max_waypoints,
-            interp_factor=args.interp_factor,
-            blend_steps=args.blend_steps,
-            smooth_gripper=args.smooth_gripper,
-        )
+        return MockExecutor(chunk_dt, args.left_arm_dim, args.right_arm_dim)
     return RosJointExecutor(
         left_action_topic=args.left_action_topic,
         right_action_topic=args.right_action_topic,
@@ -1149,10 +778,6 @@ def create_executor(args: argparse.Namespace) -> Any:
         right_arm_dim=args.right_arm_dim,
         enable_on_start=args.enable_on_start,
         waypoint_sleep=args.waypoint_sleep,
-        max_waypoints=args.max_waypoints,
-        interp_factor=args.interp_factor,
-        blend_steps=args.blend_steps,
-        smooth_gripper=args.smooth_gripper,
     )
 
 
@@ -1337,23 +962,6 @@ async def run_loop(args: argparse.Namespace) -> None:
             if args.execute_actions and is_safety_tripped(source):
                 print("[safety] skipping hold/disable-on-exit cleanup after arm_status fault")
             elif args.execute_actions:
-                if args.home_on_exit:
-                    move_home = getattr(executor, "move_home", None)
-                    if move_home is not None:
-                        try:
-                            print("[exit] returning to home pose")
-                            move_home(
-                                get_current_state(source),
-                                home_hz=args.home_hz,
-                                min_duration=args.home_min_duration,
-                                max_duration=args.home_max_duration,
-                                joint_speed=args.home_joint_speed,
-                                tolerance=args.home_tolerance,
-                            )
-                        except KeyboardInterrupt:
-                            print("[exit] home interrupted")
-                        except Exception as exc:
-                            print("[exit] home failed: {}".format(exc))
                 if args.hold_on_exit:
                     hold_position = getattr(executor, "hold_position", None)
                     if hold_position is not None:
@@ -1378,55 +986,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source", choices=["ros", "mock"], default="ros")
     parser.add_argument("--executor", choices=["ros", "mock"], default="ros")
     parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument(
-        "--execution-horizon",
-        "--max-waypoints",
-        dest="max_waypoints",
-        type=int,
-        default=None,
-        metavar="N",
-        help=(
-            "execute only the first N waypoints from each returned action chunk; "
-            "--max-waypoints is a deprecated alias; default executes the complete chunk"
-        ),
-    )
-    parser.add_argument(
-        "--action-interp-factor",
-        dest="interp_factor",
-        type=int,
-        default=1,
-        metavar="N",
-        help=(
-            "linearly upsample each executed action chunk by N; "
-            "N=1 sends the original waypoints, N=5 inserts 4 intermediate "
-            "points between each pair and keeps the original chunk duration"
-        ),
-    )
-    parser.add_argument(
-        "--action-chunk-blend-steps",
-        dest="blend_steps",
-        type=int,
-        default=0,
-        metavar="N",
-        help=(
-            "linearly blend from the last published waypoint of the previous "
-            "chunk to the first waypoint of the next chunk using N steps; "
-            "N=0 disables inter-chunk blending"
-        ),
-    )
-    parser.set_defaults(smooth_gripper=False)
-    parser.add_argument(
-        "--smooth-gripper",
-        action="store_true",
-        dest="smooth_gripper",
-        help="also interpolate/blend gripper values; default keeps gripper stepwise",
-    )
-    parser.add_argument(
-        "--no-smooth-gripper",
-        action="store_false",
-        dest="smooth_gripper",
-        help="keep gripper commands stepwise and only smooth arm joints",
-    )
     parser.add_argument("--control-hz", type=float, default=10.0)
     parser.add_argument("--jpeg-quality", type=int, default=80)
     parser.add_argument("--resize-scale", type=float, default=1.0)
@@ -1466,11 +1025,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--home-max-duration", type=float, default=20.0)
     parser.add_argument("--home-joint-speed", type=float, default=0.25)
     parser.add_argument("--home-tolerance", type=float, default=0.01)
-    parser.add_argument(
-        "--home-on-exit",
-        action="store_true",
-        help="smoothly return to zero joints after Ctrl-C or loop exit, before hold",
-    )
     parser.add_argument(
         "--no-hold-on-exit",
         action="store_false",
