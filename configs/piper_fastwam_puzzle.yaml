@@ -31,6 +31,25 @@ execution_horizon: 64
 action_dt: 0.0333333333
 max_inference_latency_s: 5.0
 
+# Server-side motion postprocessing. The client selects smooth/interp per run.
+speed_adapter_enabled: true
+speed_adapter_mode: heuristic
+speed_factor_lo: 0.75
+speed_factor_hi: 1.25
+speed_heuristic_alpha: 1.0
+speed_heuristic_v_ref: 0.05
+speed_smooth_window: 5
+temporal_smoother_enabled: true
+temporal_smoother_dt_ref: 0.0333333333
+temporal_smoother_dt_min: 0.0166666667
+temporal_smoother_dt_max: 0.0666666667
+temporal_smoother_lambda_acc: 10.0
+temporal_smoother_lambda_time: 1.0
+temporal_smoother_horizon: 64
+temporal_smoother_stride: 32
+# FastWAM internal order is [L1..L6,R1..R6,Lg,Rg].
+temporal_smoother_optim_dims: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+
 # Incoming ROS/OpenCV camera arrays are BGR. JPEG payloads are decoded to RGB
 # before the runtime regardless of this setting.
 input_color: bgr

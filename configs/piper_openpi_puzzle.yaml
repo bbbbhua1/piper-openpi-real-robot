@@ -1,10 +1,10 @@
-# Pi05 real-robot Domino deployment.
-# The latest complete checkpoint inspected on 2026-09-03 is step 80000.
+# Pi05 real-robot Puzzle deployment.
+# The latest complete puzzle checkpoint is step 99999.
 openpi_root: /bh/zbh_self/projects/openpi-official
 config: pi05_realrobot
-checkpoint: /bh/media/ZBH/pi05_domino_realrobot_jax_ft_8xA800_20260901/checkpoints/pi05_realrobot/pi05-domino-jax-8xa800-100k-20260901-r1-multiroot/80000
+checkpoint: /bh/media/ZBH/pi05_realrobot_jax_ft_8xA800_20260829/checkpoints/pi05_realrobot/pi05-realrobot-jax-8xa800-30k-20260830-r7-overlay/99999
 
-task_label: Arrange the dominoes on the table in a horizontal row and then knock them over
+task_label: Assemble the puzzle pieces on the table to complete the puzzle
 host: 127.0.0.1
 port: 7081
 num_infer_steps: 10

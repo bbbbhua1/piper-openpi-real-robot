@@ -2,13 +2,23 @@
 set -euo pipefail
 
 if [[ $# -lt 1 || ! "$1" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Usage: run_pi05_domino_client.sh EXECUTION_HORIZON [CLIENT_ARGS...]" >&2
+  echo "Usage: run_pi05_domino_client.sh EXECUTION_HORIZON [smooth|interp] [CLIENT_ARGS...]" >&2
   echo "Example: bash scripts/run_pi05_domino_client.sh 32" >&2
   exit 2
 fi
 
 execution_horizon="$1"
 shift
+motion_mode="${1:-smooth}"
+if [[ "$motion_mode" != "smooth" && "$motion_mode" != "interp" ]]; then
+  echo "motion mode must be smooth or interp" >&2
+  exit 2
+fi
+shift || true
+motion_args=(--motion-mode "$motion_mode")
+if [[ "$motion_mode" == "interp" ]]; then
+  motion_args+=(--action-interp-factor 5 --action-chunk-blend-steps 20)
+fi
 
 source /opt/ros/noetic/setup.bash
 source /home/agilex/agilex_ws/devel/setup.bash
@@ -25,8 +35,7 @@ exec /home/agilex/miniconda3/envs/xrocs-env/bin/python \
   --execute-actions \
   --home-on-exit \
   --execution-horizon "${execution_horizon}" \
-  --action-interp-factor 5 \
-  --action-chunk-blend-steps 20 \
+  "${motion_args[@]}" \
   --control-hz 10 \
   --compressed-images \
   --require-images \

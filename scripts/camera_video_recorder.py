@@ -72,6 +72,9 @@ class CameraVideoRecorder:
         upload_dir: str = DEFAULT_UPLOAD_DIR,
         popen_factory: Callable[..., Any] = subprocess.Popen,
         run_factory: Callable[..., Any] = subprocess.run,
+        frame_transform: Optional[Callable[[bytes], bytes]] = None,
+        output_filename: Optional[str] = None,
+        session_dir: Optional[str | Path] = None,
     ) -> None:
         names = tuple(_safe_component(name) for name in camera_names)
         if not names:
@@ -95,12 +98,14 @@ class CameraVideoRecorder:
             session_name if session_name else default_session_name()
         )
         self.root_dir = Path(root_dir).expanduser()
-        self.session_dir = self.root_dir / self.session_name
+        self.session_dir = Path(session_dir).expanduser() if session_dir is not None else self.root_dir / self.session_name
         self.root_dir.mkdir(parents=True, exist_ok=True)
-        self.session_dir.mkdir(parents=False, exist_ok=False)
+        self.session_dir.mkdir(parents=True, exist_ok=True)
 
         self._popen_factory = popen_factory
         self._run_factory = run_factory
+        self.frame_transform = frame_transform
+        self.output_filename = output_filename
         self._lock = threading.Lock()
         self._accepting = True
         self._closed = False
@@ -111,7 +116,8 @@ class CameraVideoRecorder:
 
         try:
             for name in names:
-                output_path = self.session_dir / "{}.mp4".format(name)
+                filename = self.output_filename if len(names) == 1 and self.output_filename else "{}.mp4".format(name)
+                output_path = self.session_dir / _safe_component(filename)
                 log_handle = (self.session_dir / "{}.ffmpeg.log".format(name)).open(
                     "ab",
                     buffering=0,
@@ -226,6 +232,8 @@ class CameraVideoRecorder:
                             state.dropped += 1
                         continue
                     try:
+                        if self.frame_transform is not None:
+                            item = self.frame_transform(item)
                         state.process.stdin.write(item)
                         with self._lock:
                             state.written += 1

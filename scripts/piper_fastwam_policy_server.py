@@ -29,6 +29,7 @@ from fastwam_piper_runtime import (
     piper_wire_to_fastwam,
     project_and_limit_fastwam_actions,
 )
+from motion_postprocessor import MotionPostprocessor
 
 try:
     # The request adapter stays CPU-testable even while the model-loading
@@ -248,6 +249,9 @@ class PiperFastWAMServer:
         # This runs before a listener is opened. A config with placeholders can
         # still load in --preflight-only mode, but it can never serve actions.
         self.safety_limits = safety_limits_from_config(self.config)
+        self.motion_postprocessor = MotionPostprocessor(
+            self.config, default_horizon=self.execution_horizon
+        )
 
     async def handler(self, websocket: Any, *_unused: Any) -> None:
         peer = getattr(websocket, "remote_address", None)
@@ -296,6 +300,9 @@ class PiperFastWAMServer:
             # that can actually be published in this response; the next
             # observation triggers a fresh rolling replan.
             execution_prediction = prediction[: self.execution_horizon]
+            execution_prediction = self.motion_postprocessor.process(
+                execution_prediction, str(request.get("motion_mode", "smooth"))
+            )
             safe_prediction, projection = project_and_limit_fastwam_actions(
                 execution_prediction, state_fastwam, self.safety_limits
             )
@@ -317,10 +324,11 @@ class PiperFastWAMServer:
             action = fastwam_to_piper_wire(safe_prediction, dt=self.action_dt)
             LOG.info(
                 "step=%s request_id=%s latency_ms=%.1f action_horizon=%s",
-                step,
-                request_id,
-                elapsed_s * 1000,
-                self.execution_horizon,
+                step, request_id, elapsed_s * 1000, self.execution_horizon,
+            )
+            LOG.info(
+                "motion_mode=%s server_adapters=%s",
+                request.get("motion_mode", "smooth"), self.motion_postprocessor.enabled,
             )
             return build_policy_response(request_id=request_id, step=step, action=action)
         except Exception as exc:

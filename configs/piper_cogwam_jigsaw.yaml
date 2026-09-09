@@ -1,0 +1,71 @@
+# CogWAM deployment. This file is deliberately separate from Pi05/FastWAM.
+cogwam_root: /bh/zbh_self/projects/CogWAM_realrobot_cached_io
+v_overlay_root: vendor/cogwam_overlay
+wam_config: /bh/zbh_self/projects/CogWAM_realrobot_cached_io/real_robot/configs/wam_jigsaw_dual_wanrobot_memory3_action32.yaml
+checkpoint_path: /bh/zbh_ckp/runs/StepLAW/puzzle_wanrobot_memory3_action32_cached_io/train/2026-09-05_03-17-10/checkpoints/weights/step_005400.pt
+dataset_stats_path: /bh/zbh_ckp/datasets/CogWAM/realrobot_jigsaw_47_dual/metadata/dataset_stats.json
+task_label: Assemble the puzzle pieces on the table to complete the puzzle
+model_action_horizon: 32
+execution_horizon: 32
+num_video_frames: 9
+num_inference_steps: 10
+temporal_smoother_enabled: true
+speed_adapter_enabled: true
+speed_adapter_mode: heuristic
+speed_factor_lo: 0.75
+speed_factor_hi: 1.25
+speed_heuristic_alpha: 1.0
+speed_heuristic_v_ref: 0.05
+speed_smooth_window: 5
+temporal_smoother_dt_ref: 0.03333333333333333
+temporal_smoother_dt_min: 0.016666666666666
+temporal_smoother_dt_max: 0.066666666666666
+temporal_smoother_lambda_acc: 10.0
+temporal_smoother_lambda_time: 1.0
+temporal_smoother_horizon: 32
+temporal_smoother_stride: 16
+mixed_precision: bf16
+device: cuda:0
+seed: 42
+wan_memory_enabled: true
+wan_memory_attention_mode: static_kv
+wan_memory_short_term_offset: 4
+wan_memory_strategy: short_term_only
+wan_memory_short_term_frame_count: 3
+input_color: bgr
+host: 127.0.0.1
+port: 7085
+# The real-robot training data is 30 FPS.
+action_dt: 0.03333333333333333
+max_message_size_mb: 64
+
+# Q1 runs once at episode start, then at each Q2-confirmed transition to a new
+# subtask. The Q2 cadence is four steps on CogWAM's internal observation grid;
+# with 64-action Piper chunks, a fresh camera observation arrives per chunk.
+vlm_enabled: true
+vlm_q2_check_interval: 4
+# The jigsaw Q2 checkpoint was trained with done-only prompts: no numeric
+# state and no failure query token.
+vlm_q2_state_enabled: false
+vlm_failure_query_enabled: false
+vlm_done_threshold: 0.5
+vlm_done_consecutive_count: 1
+vlm_memory_strategy: subtask_cls_recent_images
+vlm_memory_frames: 5
+vlm_memory_frame_stride: 4
+vlm_completed_subtask_memory_stride: 16
+vlm_current_subtask_memory_stride: 4
+final_done_file: null
+vlm_repo_path: /bh/zbh_self/projects/CogWAM/qwen-vl-progress-estimation/qwen-vl-finetune
+vlm_base_model: /bh/zbh_ckp/models/Qwen3-VL-2B-Instruct
+vlm_checkpoint: /bh/zbh_ckp/runs/CogWAM/realrobot_jigsaw_47/vlm/q2/2026-08-30_13-26-35/checkpoint-44000
+vlm_q1_adapter: /bh/zbh_ckp/runs/CogWAM/realrobot_jigsaw_47/vlm/q2/2026-08-30_13-26-35/checkpoint-44000/q1
+# Q2 adapter used for non-final subtask completion checks.
+vlm_q2_adapter: /bh/zbh_ckp/runs/CogWAM/realrobot_jigsaw_47/vlm/q2/2026-08-30_13-26-35/checkpoint-44000/q2
+
+# CogWAM-only physical output safety boundary, in Piper wire order:
+# [L1,L2,L3,L4,L5,L6,Lg,R1,R2,R3,R4,R5,R6,Rg].
+# Arm values are radians; gripper values are metres.
+joint_lower: [-2.617993878, 0.0, -2.967059728, -1.745329252, -1.221730476, -3.141592654, 0.0, -2.617993878, 0.0, -2.967059728, -1.745329252, -1.221730476, -3.141592654, 0.0]
+joint_upper: [2.617993878, 3.141592654, 0.0, 1.745329252, 1.221730476, 3.141592654, 0.08, 2.617993878, 3.141592654, 0.0, 1.745329252, 1.221730476, 3.141592654, 0.08]
+max_delta: [100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100]

@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 || ! "$1" =~ ^[1-9][0-9]*$ ]]; then
-  echo "Usage: fastwam EXECUTION_HORIZON" >&2
-  echo "Example: fastwam 64" >&2
+if [[ $# -lt 1 || ! "$1" =~ ^[1-9][0-9]*$ ]]; then
+  echo "Usage: run_fastwam_client.sh EXECUTION_HORIZON [smooth|interp]" >&2
+  echo "Example: bash scripts/run_fastwam_client.sh 64 smooth" >&2
   exit 2
 fi
 
 execution_horizon="$1"
+shift
+motion_mode="${1:-smooth}"
+if [[ "$motion_mode" != "smooth" && "$motion_mode" != "interp" ]]; then
+  echo "motion mode must be smooth or interp" >&2
+  exit 2
+fi
+motion_args=(--motion-mode "$motion_mode")
+if [[ "$motion_mode" == "interp" ]]; then
+  motion_args+=(--action-interp-factor 5 --action-chunk-blend-steps 20)
+fi
 
 source /opt/ros/noetic/setup.bash
 source /home/agilex/agilex_ws/devel/setup.bash
@@ -23,6 +33,7 @@ exec /home/agilex/miniconda3/envs/xrocs-env/bin/python \
   --enable-on-start true \
   --execute-actions \
   --execution-horizon "${execution_horizon}" \
+  "${motion_args[@]}" \
   --start-pose-config /home/agilex/piper-openpi-real-robot-20260831/configs/piper_fastwam_puzzle_start_pose.json \
   --control-hz 20 \
   --compressed-images \

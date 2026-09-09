@@ -3,7 +3,7 @@
 """Host A websocket policy client for Piper ROS.
 
 The client reads local observations, sends one request to the policy server,
-receives one chunked action, executes it locally, and repeats.
+receives one chunked action, executes it locally, and repeats synchronously.
 
 Use `--source mock --executor mock` to test the websocket loop without ROS or
 robot hardware.
@@ -43,6 +43,51 @@ from ws_policy_protocol import (
     FASTWAM_TRANSPORT_IMAGE_SIZES,
     build_policy_request,
 )
+
+
+class SubtaskOverlay:
+    """Thread-safe Q1/Q2 state used to annotate the head-camera recording."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._data: Dict[str, Any] = {}
+
+    def update(self, response: Dict[str, Any]) -> None:
+        progress = response.get("subtask_progress")
+        if isinstance(progress, dict):
+            with self._lock:
+                self._data = dict(progress)
+
+    def transform(self, payload: bytes) -> bytes:
+        import cv2
+        import numpy as np
+
+        image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            return payload
+        with self._lock:
+            data = dict(self._data)
+        goals = data.get("subtasks") or []
+        current = int(data.get("current_index", 0) or 0)
+        completed = int(data.get("completed_count", 0) or 0)
+        total = max(len(goals), completed, 1)
+        current_goal = str(data.get("current_goal") or "No active subtask")
+        q2 = data.get("q2_status") or {}
+        q2_text = "Q2: done={} confidence={}".format(q2.get("done", False), q2.get("confidence", "-"))
+        height, width = image.shape[:2]
+        bar_h = max(42, height // 14)
+        overlay = image.copy()
+        cv2.rectangle(overlay, (0, 0), (width, bar_h + 62), (18, 24, 30), -1)
+        image = cv2.addWeighted(overlay, 0.82, image, 0.18, 0)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        cv2.putText(image, "Subtask {}/{}: {}".format(min(current + 1, total), total, current_goal[:110]), (12, 25), font, 0.62, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(image, q2_text[:110], (12, 52), font, 0.5, (205, 220, 230), 1, cv2.LINE_AA)
+        x0, y0, x1, y1 = 12, bar_h + 20, width - 12, bar_h + 36
+        cv2.rectangle(image, (x0, y0), (x1, y1), (75, 80, 85), -1)
+        cv2.rectangle(image, (x0, y0), (x0 + int((x1 - x0) * min(1.0, completed / total)), y1), (45, 190, 95), -1)
+        cv2.putText(image, "Q1/Q2 progress: {}/{} completed".format(completed, total), (12, y1 + 23), font, 0.48, (255, 255, 255), 1, cv2.LINE_AA)
+        ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+        return encoded.tobytes() if ok else payload
 
 
 def _normalize_numeric_vector(values: Any, field_name: str, expected_len: int) -> List[float]:
@@ -499,6 +544,47 @@ def log_executed_chunk(chunk: Dict[str, Any]) -> None:
         print("[execute] gripper held stepwise; only joints are smoothed")
 
 
+def slice_action_chunk(action: Dict[str, Any], start: int, end: int) -> Dict[str, Any]:
+    """Return a relative-time action slice for intermediate observation cadence."""
+    left = action.get("left_arm", [])[start:end]
+    right = action.get("right_arm", [])[start:end]
+    if not left or not right or len(left) != len(right):
+        raise ValueError("action chunk does not contain matching arm waypoints")
+    raw_times = action.get("time_list") or []
+    if len(raw_times) >= end:
+        base = float(raw_times[start - 1]) if start else 0.0
+        times = [float(raw_times[index]) - base for index in range(start, end)]
+    else:
+        dt = float(action.get("dt", 1.0 / 30.0))
+        times = [dt * (index + 1) for index in range(end - start)]
+    sliced = {"left_arm": left, "right_arm": right, "time_list": times}
+    for key in ("left_gripper", "right_gripper"):
+        if key in action:
+            sliced[key] = action[key][start:end]
+    sliced["dt"] = float(action.get("dt", times[0] if times else 1.0 / 30.0))
+    return sliced
+
+
+async def _read_policy_responses(
+    websocket: Any,
+    response_queues: Dict[str, "asyncio.Queue[Dict[str, Any]]"],
+    observation_queue: "asyncio.Queue[Dict[str, Any]]",
+) -> None:
+    """Route concurrent server replies without stealing action responses."""
+    try:
+        async for raw in websocket:
+            response = json.loads(raw)
+            request_id = str(response.get("request_id", ""))
+            if response.get("observation_only", False):
+                await observation_queue.put(response)
+                continue
+            queue = response_queues.get(request_id)
+            if queue is not None:
+                await queue.put(response)
+    except asyncio.CancelledError:
+        raise
+
+
 class MockObservationSource:
     def __init__(self) -> None:
         self.step = 0
@@ -612,6 +698,8 @@ class RosObservationSource:
         require_images: bool,
         enable_topic: str,
         video_recorder: Optional[CameraVideoRecorder] = None,
+        overlay_recorder: Optional[CameraVideoRecorder] = None,
+        subtask_overlay: Optional[SubtaskOverlay] = None,
     ) -> None:
         import rospy
         from piper_msgs.msg import PiperStatusMsg
@@ -624,6 +712,8 @@ class RosObservationSource:
         self.camera_topics = camera_topics
         self.enable_topic = enable_topic
         self.video_recorder = video_recorder
+        self.overlay_recorder = overlay_recorder
+        self.subtask_overlay = subtask_overlay
         self.lock = threading.Lock()
         self.left_joint = None
         self.right_joint = None
@@ -717,6 +807,9 @@ class RosObservationSource:
         payload = bytes(msg.data)
         if self.video_recorder is not None:
             self.video_recorder.submit(camera_name, payload)
+        overlay_recorder = getattr(self, "overlay_recorder", None)
+        if camera_name == "head" and overlay_recorder is not None:
+            overlay_recorder.submit(camera_name, payload)
         with self.lock:
             self.images[camera_name] = {
                 "encoding": "jpeg",
@@ -772,9 +865,13 @@ class RosObservationSource:
         if recorder is None:
             return
         self.video_recorder = None
+        overlay_recorder = getattr(self, "overlay_recorder", None)
+        self.overlay_recorder = None
 
         print("[record] finalizing videos in {}".format(recorder.session_dir))
         recorder.close()
+        if overlay_recorder is not None:
+            overlay_recorder.close()
         manifest_path = recorder.write_manifest()
         print("[record] manifest written: {}".format(manifest_path))
         try:
@@ -783,6 +880,11 @@ class RosObservationSource:
         except Exception as exc:
             print("[record] upload failed: {}".format(exc))
             print("[record] local recording preserved: {}".format(recorder.session_dir))
+
+    def update_recording_metadata(self, response: Dict[str, Any]) -> None:
+        subtask_overlay = getattr(self, "subtask_overlay", None)
+        if subtask_overlay is not None:
+            subtask_overlay.update(response)
 
 
 class RosJointExecutor:
@@ -1093,6 +1195,8 @@ def create_source(args: argparse.Namespace) -> Any:
         return MockObservationSource()
     camera_topics = parse_camera_topics(args.camera_topic)
     video_recorder = None
+    overlay_recorder = None
+    subtask_overlay = None
     if args.record_videos:
         if not args.compressed_images:
             raise ValueError("--record-videos requires --compressed-images")
@@ -1109,6 +1213,22 @@ def create_source(args: argparse.Namespace) -> Any:
             upload_key=args.record_upload_key,
             upload_dir=args.record_upload_dir,
         )
+        if "head" in camera_topics:
+            subtask_overlay = SubtaskOverlay()
+            overlay_recorder = CameraVideoRecorder(
+                camera_names=("head",),
+                root_dir=args.record_dir,
+                session_name=args.record_session_name,
+                session_dir=video_recorder.session_dir,
+                output_filename="head_subtask_overlay.mp4",
+                frame_transform=subtask_overlay.transform,
+                fps=args.record_fps,
+                queue_size=args.record_queue_size,
+                upload_host=args.record_upload_host,
+                upload_port=args.record_upload_port,
+                upload_key=args.record_upload_key,
+                upload_dir=args.record_upload_dir,
+            )
         print("[record] recording session: {}".format(video_recorder.session_dir))
 
     try:
@@ -1120,10 +1240,14 @@ def create_source(args: argparse.Namespace) -> Any:
             require_images=args.require_images,
             enable_topic=args.enable_topic,
             video_recorder=video_recorder,
+            overlay_recorder=overlay_recorder,
+            subtask_overlay=subtask_overlay,
         )
     except Exception:
         if video_recorder is not None:
             video_recorder.close()
+            if overlay_recorder is not None:
+                overlay_recorder.close()
             video_recorder.write_manifest()
         raise
 
@@ -1291,6 +1415,34 @@ async def run_loop(args: argparse.Namespace) -> None:
         ) as websocket:
             print("connected to policy server: {}".format(args.uri))
             step = 0
+            response_queues: Dict[str, asyncio.Queue] = {}
+            observation_queue: asyncio.Queue = asyncio.Queue()
+            response_reader = asyncio.create_task(
+                _read_policy_responses(websocket, response_queues, observation_queue)
+            )
+
+            async def request_response(request_payload: Dict[str, Any]) -> Dict[str, Any]:
+                request_id = str(request_payload["request_id"])
+                queue: asyncio.Queue = asyncio.Queue(maxsize=1)
+                response_queues[request_id] = queue
+                try:
+                    await websocket.send(json.dumps(request_payload, ensure_ascii=False))
+                    return await queue.get()
+                finally:
+                    response_queues.pop(request_id, None)
+
+            if args.reset_before_start:
+                reset_request = {
+                    "request_id": "client-reset-{}".format(int(time.time() * 1000)),
+                    "type": "reset",
+                    "step": 0,
+                }
+                reset_response = await request_response(reset_request)
+                if not reset_response.get("ok", False) or not reset_response.get("reset", False):
+                    raise RuntimeError(
+                        "policy server reset failed: {}".format(reset_response.get("error"))
+                    )
+                print("policy server memory reset")
             while args.max_steps is None or step < args.max_steps:
                 loop_start = time.time()
                 images, state = source.get_observation()
@@ -1303,16 +1455,55 @@ async def run_loop(args: argparse.Namespace) -> None:
                     resize_scale=args.resize_scale,
                     transport_image_sizes=transport_image_sizes,
                 )
+                # Tell adaptive servers how many returned waypoints will be
+                # physically executed before this client's next observation.
+                execute_horizon = int(args.max_waypoints or 32)
+                if execute_horizon <= 0:
+                    raise ValueError("client execution horizon must be positive")
+                request["client_execution_horizon"] = execute_horizon
+                request["motion_mode"] = args.motion_mode
                 print("state", state)
 
-                await websocket.send(json.dumps(request, ensure_ascii=False))
-                response = json.loads(await websocket.recv())
+                response = await request_response(request)
                 if not response.get("ok", False):
                     raise RuntimeError("policy server error: {}".format(response.get("error")))
+                update_recording_metadata = getattr(source, "update_recording_metadata", None)
+                if update_recording_metadata is not None:
+                    update_recording_metadata(response)
+                if response.get("final_task_done", False):
+                    print("[task] server Q2 marked the final subtask complete; stopping execution")
+                    break
                 print("action", json.dumps(response["action"],ensure_ascii=False,indent=2))
                 raise_if_safety_tripped(source)
                 if args.execute_actions:
-                    chunk_duration_s = executor.execute_action(response["action"])
+                    action = response["action"]
+                    available = len(action.get("left_arm", []))
+                    if available < execute_horizon:
+                        raise RuntimeError(
+                            "policy returned {} waypoints, cannot execute requested {}".format(
+                                available, execute_horizon
+                            )
+                        )
+                    # Execute the returned chunk as one unit, matching the
+                    # Pi05 client. Inter-chunk blending must happen once at
+                    # the boundary, not once for every four-waypoint slice.
+                    chunk_duration_s = executor.execute_action(action)
+                    step += execute_horizon
+                    images, state = source.get_observation()
+                    update = build_policy_request(
+                        step=step,
+                        instruction=args.instruction,
+                        state=state,
+                        images=images,
+                        jpeg_quality=args.jpeg_quality,
+                        resize_scale=args.resize_scale,
+                        transport_image_sizes=transport_image_sizes,
+                    )
+                    update["observation_only"] = True
+                    update["client_execution_horizon"] = execute_horizon
+                    update["motion_mode"] = args.motion_mode
+                    await websocket.send(json.dumps(update, ensure_ascii=False))
+                    await asyncio.sleep(0)
                 else:
                     print("[dry-run] action execution disabled; pass --execute-actions to publish commands")
                     chunk_duration_s = 0
@@ -1325,7 +1516,8 @@ async def run_loop(args: argparse.Namespace) -> None:
                     )
                 )
 
-                step += 1
+                if not args.execute_actions:
+                    step += execute_horizon
                 min_cycle_s = max(1.0 / args.control_hz, chunk_duration_s)
                 sleep_s = max(0.0, min_cycle_s - elapsed)
                 if sleep_s > 0:
@@ -1333,6 +1525,12 @@ async def run_loop(args: argparse.Namespace) -> None:
     except SafetyTrip as exc:
         print("[safety] client stopped: {}".format(exc))
     finally:
+        if "response_reader" in locals():
+            response_reader.cancel()
+            try:
+                await response_reader
+            except asyncio.CancelledError:
+                pass
         try:
             if args.execute_actions and is_safety_tripped(source):
                 print("[safety] skipping hold/disable-on-exit cleanup after arm_status fault")
@@ -1379,6 +1577,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--executor", choices=["ros", "mock"], default="ros")
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument(
+        "--reset-before-start",
+        action="store_true",
+        help="clear policy/Wan/VLM episode state after connecting, without stopping the server",
+    )
+    parser.add_argument(
         "--execution-horizon",
         "--max-waypoints",
         dest="max_waypoints",
@@ -1414,6 +1617,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "N=0 disables inter-chunk blending"
         ),
     )
+    parser.add_argument("--motion-mode", choices=["smooth", "interp"], default="smooth")
     parser.set_defaults(smooth_gripper=False)
     parser.add_argument(
         "--smooth-gripper",
